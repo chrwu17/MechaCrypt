@@ -3,11 +3,12 @@
 // 10/15/2025
 
 /////////////////////////////////////////////
-// aes
+// aesDecryption
 //   Top level module with SPI interface and SPI core
 /////////////////////////////////////////////
 
-module aes(input  logic clk,
+module aesDecryption(
+           input  logic clk,
            input  logic sck, 
            input  logic sdi,
            output logic sdo,
@@ -15,9 +16,21 @@ module aes(input  logic clk,
            output logic done);
                     
     logic [127:0] key, plaintext, cyphertext;
+    logic clk;
+    
+    // Synchronize load signal to the clk instead of sck
+    logic load_meta, load_sync;
+    always_ff @(posedge clk) begin
+        load_meta <= load;
+        load_sync <= load_meta;
+    end
+
+    // Internal high-speed oscillator to generate slow clock
+    HSOSC hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
             
-    aes_spi spi(sck, sdi, sdo, done, key, plaintext, cyphertext);   
-    aes_decrypt_core core(clk, load, key, plaintext, done, cyphertext);
+    aes_spi spi(sck, sdi, sdo, done, key, plaintext, cyphertext);
+
+    aes_core core(clk, load, key, plaintext, done, cyphertext);
 endmodule
 
 /////////////////////////////////////////////
@@ -59,7 +72,7 @@ endmodule
 
 
 /////////////////////////////////////////////
-// aes_decrypt_core
+// aes_core
 //   AES decryption core
 //   Follows SP Network structure similar to encryption
 //
@@ -73,13 +86,13 @@ endmodule
 //   This is also done during key schedule generation to save time during decryption rounds.
 /////////////////////////////////////////////
 
-module aes_decrypt_core(
+module aes_core(
     input  logic         clk, 
     input  logic         decrypt,           // NEW
     input  logic [127:0] key, 
-    input  logic [127:0] cyphertext, 
-    output logic         done_decrypt,    // NEW
-    output logic [127:0] plaintext);
+    input  logic [127:0] cyphertext,        // NEW
+    output logic         done_decrypt,      // NEW
+    output logic [127:0] plaintext);        // NEW
 
     // Internal signals
     logic ka_busy, ka_done; // advance key schedule signals
@@ -216,9 +229,7 @@ module aes_decrypt_core(
     end 
 endmodule
 
-
-
-/////////////////// AES Decryption Primitives for Equivalent Inverse Cipher ////////////////////////
+///////////////////////// AES Decryption Primitives for Equivalent Inverse Cipher //////////////////////////////
 
 /////////////////////////////////////////////
 // sbox
@@ -268,10 +279,10 @@ endmodule
 module inv_mixcolumns(input  logic [127:0] a,
                       output logic [127:0] y);
 
-    inv_mixcolumn c0(a[127:96], y[127:96]);
-    inv_mixcolumn c1(a[95:64],  y[95:64]);
-    inv_mixcolumn c2(a[63:32],  y[63:32]);
-    inv_mixcolumn c3(a[31:0],   y[31:0]);
+    inv_mixcolumn imc0(a[127:96], y[127:96]);
+    inv_mixcolumn imc1(a[95:64],  y[95:64]);
+    inv_mixcolumn imc2(a[63:32],  y[63:32]);
+    inv_mixcolumn imc3(a[31:0],   y[31:0]);
 endmodule
 
 /////////////////////////////////////////////                  
@@ -361,22 +372,22 @@ module inv_subBytes(input logic clk,
                     input  logic [127:0] a,
                     output logic [127:0] y);
 
-    inv_sbox_sync sb0(a[127:120], clk, y[127:120]);
-    inv_sbox_sync sb1(a[119:112], clk, y[119:112]);
-    inv_sbox_sync sb2(a[111:104], clk, y[111:104]);
-    inv_sbox_sync sb3(a[103:96] , clk, y[103:96]);
-    inv_sbox_sync sb4(a[95:88]  , clk, y[95:88]);
-    inv_sbox_sync sb5(a[87:80]  , clk, y[87:80]);
-    inv_sbox_sync sb6(a[79:72]  , clk, y[79:72]);
-    inv_sbox_sync sb7(a[71:64]  , clk, y[71:64]);
-    inv_sbox_sync sb8(a[63:56]  , clk, y[63:56]);
-    inv_sbox_sync sb9(a[55:48]  , clk, y[55:48]);
-    inv_sbox_sync sb10(a[47:40] , clk, y[47:40]);
-    inv_sbox_sync sb11(a[39:32] , clk, y[39:32]);
-    inv_sbox_sync sb12(a[31:24] , clk, y[31:24]);
-    inv_sbox_sync sb13(a[23:16] , clk, y[23:16]);
-    inv_sbox_sync sb14(a[15:8]  , clk, y[15:8]);
-    inv_sbox_sync sb15(a[7:0]   , clk, y[7:0]);
+    inv_sbox_sync isb0(a[127:120], clk, y[127:120]);
+    inv_sbox_sync isb1(a[119:112], clk, y[119:112]);
+    inv_sbox_sync isb2(a[111:104], clk, y[111:104]);
+    inv_sbox_sync isb3(a[103:96] , clk, y[103:96]);
+    inv_sbox_sync isb4(a[95:88]  , clk, y[95:88]);
+    inv_sbox_sync isb5(a[87:80]  , clk, y[87:80]);
+    inv_sbox_sync isb6(a[79:72]  , clk, y[79:72]);
+    inv_sbox_sync isb7(a[71:64]  , clk, y[71:64]);
+    inv_sbox_sync isb8(a[63:56]  , clk, y[63:56]);
+    inv_sbox_sync isb9(a[55:48]  , clk, y[55:48]);
+    inv_sbox_sync isb10(a[47:40] , clk, y[47:40]);
+    inv_sbox_sync isb11(a[39:32] , clk, y[39:32]);
+    inv_sbox_sync isb12(a[31:24] , clk, y[31:24]);
+    inv_sbox_sync isb13(a[23:16] , clk, y[23:16]);
+    inv_sbox_sync isb14(a[15:8]  , clk, y[15:8]);
+    inv_sbox_sync isb15(a[7:0]   , clk, y[7:0]);
 
 endmodule
 
@@ -393,19 +404,19 @@ module inv_shiftRows(input  logic [127:0] a,
     assign y[63:56]   = a[63:56];
     assign y[31:24]   = a[31:24];
 
-    // row 1 right by 1
+    // row 1 shifted right by 1
     assign y[119:112] = a[23:16];
     assign y[87:80]   = a[119:112];
     assign y[55:48]   = a[87:80];
     assign y[23:16]   = a[55:48];
 
-    // row 2 right by 2
+    // row 2 shifted right by 2
     assign y[111:104] = a[47:40];
     assign y[79:72]   = a[15:8];
     assign y[47:40]   = a[111:104];
     assign y[15:8]    = a[79:72];
 
-    // row 3 right by 3
+    // row 3 shifted right by 3
     assign y[103:96]  = a[71:64];
     assign y[71:64]   = a[39:32];
     assign y[39:32]   = a[7:0];
