@@ -3,13 +3,13 @@
 // 11/5/2025
 
 //////////////////////////////////////////////////////////// 
-// msg_send() 
+// msgSend() 
 //      Takes in a 128-bit input (16 bytes) and sends it outone byte at a time over a parallel 8-bit output,
 //      synchronized to a slower transfer clk (tx_clk) that is also sent alongside the data. 
 //      It is meant to drive the mechanical actuators of the MechaCrypt system.
 ////////////////////////////////////////////////////////////
 
-module msg_send #(
+module msgSend #(
     parameter CLK_FREQ = 48_000_000,  // system clock frequency (Set to 48MHz based on HSOSC)
     parameter TX_FREQ  = 3            // 3bytes/sec = 24bps (for mechanical actuation)
     )(
@@ -19,7 +19,7 @@ module msg_send #(
     input  logic [127:0] msg_in,      // 128-bit input message to send
     output logic [7:0]   msg_out,     // 8-bit output message (one byte at a time)
     output logic         tx_clk,      // transfer clock output
-    output logic         done);       // signal indicating message has been fully sent  
+    output logic         send_done);  // signal indicating message has been fully sent  
 
     // Generate tx_clk based on CLK_FREQ and TX_FREQ
     localparam integer DIV_COUNT = CLK_FREQ / (2 * TX_FREQ); 
@@ -49,17 +49,17 @@ module msg_send #(
         if (!reset) begin
             idx        <= 0;
             sending    <= 0;
-            done       <= 0;
+            send_done  <= 0;
         end else if (start && !sending) begin
             sending    <= 1;
             idx        <= 0;
-            done       <= 0;
+            send_done  <= 0;
         end else if (sending && tx_clk_en) begin
             // advance on each tx_clk rising edge
             if (idx == 15) begin
                 idx        <= 0;
                 sending    <= 0;
-                done       <= 1;
+                send_done  <= 1;
             end else begin
                 idx <= idx + 1;
             end

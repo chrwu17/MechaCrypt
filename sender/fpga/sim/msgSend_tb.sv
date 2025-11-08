@@ -4,11 +4,11 @@
 // 11/6/2025
 
 /////////////////////////////////////////////
-// msg_send_tb
-// Testbench for ability to split array and send bytes out one at a time
+// msgSend_tb()
+//      Testbench for ability to split array and send bytes out one at a time
 /////////////////////////////////////////////
 
-module msg_send_tb();
+module msgSend_tb();
 
     // Parameters
     localparam CLK_FREQ = 48_000_000;
@@ -17,7 +17,7 @@ module msg_send_tb();
     // Signals
     logic clk, reset, start;
     logic [7:0] msg_out;
-    logic tx_clk, done;
+    logic tx_clk, send_done;
 
     // DUT input
     logic [127:0] msg_in = 128'hDEADBEEF_F00DBABE_12345678_ABCDEF00;
@@ -33,7 +33,7 @@ module msg_send_tb();
         .msg_in(msg_in),
         .msg_out(msg_out),
         .tx_clk(tx_clk),
-        .done(done)
+        .send_done(send_done)
     );
 
     // Clock generation
@@ -51,15 +51,15 @@ module msg_send_tb();
         #20;
         start = 0;
 
-        wait(done);
-        $display("[%0t ns] Done", $time);
+        wait(send_done);
+        $display("[%0t ns] send_done", $time);
         #200;
         $stop;
     end
 
     // Monitor signals
     initial begin
-        $monitor("[%0t ns] tx_clk=%b msg_out=%h done=%b",
-                  $time, tx_clk, msg_out, done);
+        $monitor("[%0t ns] tx_clk=%b msg_out=%h send_done=%b",
+                  $time, tx_clk, msg_out, send_done);
     end
 endmodule

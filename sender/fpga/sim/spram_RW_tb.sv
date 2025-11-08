@@ -45,8 +45,6 @@ module spram_RW_tb;
 
     // Testbench control
     initial begin
-        $display("=== SPRAM Read/Write Test ===");
-
         // Initialize signals
         done = 0;
         ciphertext = 128'hDEADBEEF_F00DBABE_12345678_ABCDEF00;

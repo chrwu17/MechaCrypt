@@ -9,16 +9,15 @@
 //   Top level module with SPI interface and SPI core
 /////////////////////////////////////////////
 
-module aesEncryption( 
-            // input  logic clk,
-           input  logic sck,
-           input  logic sdi,
-           output logic sdo,
-           input  logic load,
-           output logic done);
+module aesEncryption(input  logic clk,
+                     input  logic sck,
+                     input  logic sdi,
+                     input  logic load,
+                     output logic sdo,
+                     output logic [127:0] cyphertext,
+                     output logic done);
 
-    logic [127:0] key, plaintext, cyphertext;
-    logic clk;
+    logic [127:0] key, plaintext;
     
     // Synchronize load signal to the clk instead of sck
     logic load_meta, load_sync;
@@ -26,9 +25,6 @@ module aesEncryption(
         load_meta <= load;
         load_sync <= load_meta;
     end
-
-    // Internal high-speed oscillator
-    HSOSC hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
     
     aes_spi spi(sck, sdi, sdo, done, key, plaintext, cyphertext);
     
