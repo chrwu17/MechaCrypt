@@ -27,7 +27,7 @@ module aesEncryption(
         load_sync <= load_meta;
     end
 
-    // Internal high-speed oscillator to generate slow clock
+    // Internal high-speed oscillator
     HSOSC hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
     
     aes_spi spi(sck, sdi, sdo, done, key, plaintext, cyphertext);

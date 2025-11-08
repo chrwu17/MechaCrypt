@@ -11,7 +11,7 @@
 
 module msg_send #(
     parameter CLK_FREQ = 48_000_000,  // system clock frequency (Set to 48MHz based on HSOSC)
-    parameter TX_FREQ  = 3            // desired transfer clock frequency (Hz)
+    parameter TX_FREQ  = 3            // 3bytes/sec = 24bps (for mechanical actuation)
     )(
     input  logic         clk,
     input  logic         reset,
