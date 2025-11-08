@@ -50,17 +50,17 @@ module spramRead (
     end
 
     // SPRAM read logic
-    SB_SPRAM256KA spram_inst (
-        .DATAIN     (16'b0),
-        .ADDRESS    (addr),
-        .MASKWREN   (4'b0000),
-        .WREN       (1'b0),
-        .CHIPSELECT (1'b1),
-        .CLOCK      (clk),
-        .STANDBY    (1'b0),
-        .SLEEP      (1'b0),
-        .POWEROFF   (1'b1),
-        .DATAOUT    (data_word));
+    SP256K spram_inst (
+        .AD       (addr),
+        .DI       (16'b0),
+        .MASKWE   (4'b0000),
+        .WE       (1'b0),
+        .CS       (1'b1),
+        .CK       (clk),
+        .STDBY    (1'b0),
+        .SLEEP    (1'b0),
+        .PWROFF_N (1'b1),
+        .DO       (data_word));
 
 endmodule
 

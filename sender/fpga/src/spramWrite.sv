@@ -85,17 +85,17 @@ module spramWrite (
     genvar j;
     generate
         for (j = 0; j < 8; j++) begin : spram_block
-            SB_SPRAM256KA spram_inst (
-                .ADDRESS    (addr),
-                .DATAIN     (data_in[j]),
-                .MASKWREN   (4'b1111),
-                .WREN       (we_reg),
-                .CHIPSELECT (1'b1),
-                .CLOCK      (clk),
-                .STANDBY    (1'b0),
-                .SLEEP      (1'b0),
-                .POWEROFF   (1'b1),
-                .DATAOUT    ()
+            SP256K spram_inst (
+                .AD       (addr),
+                .DI       (data_in[j]),
+                .MASKWE   (4'b1111),
+                .WE       (we_reg),
+                .CS       (1'b1),
+                .CK       (clk),
+                .STDBY    (1'b0),
+                .SLEEP    (1'b0),
+                .PWROFF_N (1'b1),
+                .DO       ()
             );
         end
     endgenerate

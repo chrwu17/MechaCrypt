@@ -12,9 +12,10 @@ module sender (
     input logic sck,            // SPI clock
     input logic sdi,            // SPI data in
     input logic load,           // Load signal to start encryption
+    output logic sdo,           // SPI data out
     output logic [7:0] msg_out, // 8-bit message output
-    output logic tx_clk         // Transfer clock output
-    output logic send_done,     // Sending done signal
+    output logic tx_clk,         // Transfer clock output
+    output logic send_done     // Sending done signal
 );
 
     // Internal high-speed oscillator
@@ -22,7 +23,7 @@ module sender (
     HSOSC hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz    
 
     // AES Encryption Module
-    logic sck, sdi, load, sdo, done;
+    logic done;
     logic [127:0] ciphertext;
 
     aesEncryption encrypt (
