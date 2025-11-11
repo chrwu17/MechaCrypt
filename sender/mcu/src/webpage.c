@@ -1,59 +1,71 @@
 #include "../lib/webpage.h"
 #include "../lib/STM32L432KC_USART.h"
 #include "../lib/STM32L432KC_GPIO.h"
+#include "../lib/STM32L432KC_TIM.h"
 #include "../lib/STM32L432KC.h"
 #include "../lib/main.h"
+#include "../lib/trng.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
 
-// ---------- Optional hook you can implement elsewhere ----------
-// Provide your own non-weak implementation later to push to FPGA via SPI.
-__attribute__((weak)) void spi_send_block(const uint8_t blk[16]) {
-  (void)blk; // no-op for now
-}
+// ----------------- Shared state -----------------
+uint8_t plaintext_blocks[MAX_BLOCKS][16];
+uint8_t keys[MAX_BLOCKS][16];
+uint8_t have_block[MAX_BLOCKS];
+volatile uint16_t total_blocks = 0;
 
-// Simple quick LED blink as a visible ACK (adjust as you like)
+// ----------------- LED blink with timer delays -----------------
 static void led_blink_short(void) {
   digitalWrite(LED_PIN, 1);
-  for (volatile int i = 0; i < 60000; ++i) __NOP();
+  delay_millis(TIM15, 150);
   digitalWrite(LED_PIN, 0);
 }
 
-// ---------- HTTP helpers ----------
+// Error blink (3 fast blinks)
+static void led_error_blink(void) {
+  for (int j = 0; j < 3; j++) {
+    digitalWrite(LED_PIN, 1);
+    delay_millis(TIM15, 50);
+    digitalWrite(LED_PIN, 0);
+    delay_millis(TIM15, 50);
+  }
+}
+
+// ----------------- HTTP helpers -----------------
 static const char http_header_ok[] =
 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n";
 static const char http_header_no_content[] =
 "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n";
 
-// ---------- Static HTML (client-side PKCS#7 tool) ----------
+// ----------------- Static HTML/JS page -----------------
 const char webpage[] =
 "<!DOCTYPE html><html lang=\"en\"><head>"
 "<meta charset=\"utf-8\"/>"
 "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/>"
-"<title>MechaCrypt user Sender Input</title>"
+"<title>MechaCrypt Sender Input</title>"
 "<style>"
-"  :root{--edge:#dcdcdc;--muted:#666}"
-"  body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;line-height:1.35}"
-"  h1{font-size:1.25rem;margin:0 0 10px}"
-"  .overline{font-size:.9rem;font-weight:700;letter-spacing:.04em;color:var(--muted);margin:0 0 4px}"
-"  .card{border:1px solid var(--edge);border-radius:12px;padding:16px;box-shadow:0 1px 6px rgba(0,0,0,.04)}"
-"  label{display:block;font-weight:600;margin-bottom:6px}"
-"  textarea{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:10px;border:1px solid var(--edge);font:inherit;resize:vertical;min-height:90px}"
-"  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px}"
-"  .muted{color:var(--muted)}"
-"  button{padding:10px 14px;border-radius:10px;border:1px solid var(--edge);cursor:pointer;background:#111;color:#fff;font-weight:600}"
-"  button.ghost{background:#fff;color:#111}"
-"  table{width:100%;border-collapse:collapse;margin-top:16px}"
-"  th,td{border:1px solid var(--edge);padding:8px 10px;text-align:left}"
-"  th{background:#fafafa}"
-"  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}"
-"  .right{text-align:right}"
-"  .wrap{word-break:break-word}"
-"  .pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border:1px solid var(--edge);border-radius:999px}"
+":root{--edge:#dcdcdc;--muted:#666}"
+"body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;line-height:1.35}"
+"h1{font-size:1.25rem;margin:0 0 10px}"
+".overline{font-size:.9rem;font-weight:700;letter-spacing:.04em;color:var(--muted);margin:0 0 4px}"
+".card{border:1px solid var(--edge);border-radius:12px;padding:16px;box-shadow:0 1px 6px rgba(0,0,0,04)}"
+"label{display:block;font-weight:600;margin-bottom:6px}"
+"textarea{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:10px;border:1px solid var(--edge);font:inherit;resize:vertical;min-height:90px}"
+".row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px}"
+".muted{color:var(--muted)}"
+"button{padding:10px 14px;border-radius:10px;border:1px solid var(--edge);cursor:pointer;background:#111;color:#fff;font-weight:600}"
+"button.ghost{background:#fff;color:#111}"
+"table{width:100%;border-collapse:collapse;margin-top:16px}"
+"th,td{border:1px solid var(--edge);padding:8px 10px;text-align:left}"
+"th{background:#fafafa}"
+"code,mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}"
+".right{text-align:right}"
+".wrap{word-break:break-word}"
+".pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border:1px solid var(--edge);border-radius:999px}"
 "</style>"
 "</head><body>"
-"<div class=\"overline\">MechaCrypt user Sender Input</div>"
+"<div class=\"overline\">MechaCrypt Sender Input</div>"
 "<h1>Text → 128-bit (16-byte) ASCII Blocks</h1>"
 "<div class=\"card\">"
 "  <label for=\"msg\">Enter text</label>"
@@ -67,29 +79,38 @@ const char webpage[] =
 "    <button id=\"copyAll\" class=\"ghost\" title=\"Copy all hex bytes (space-separated)\">Copy All Hex</button>"
 "  </div>"
 "</div>"
-"<div id=\"out\" class=\"card\" style=\"margin-top:16px;display:none;\">"
-"  <div id=\"summary\" class=\"muted\"></div>"
-"  <table id=\"tbl\"><thead>"
-"    <tr><th class=\"right\">Block #</th><th>ASCII (printable)</th><th>Hex bytes</th><th class=\"right\">Actions</th></tr>"
-"  </thead><tbody></tbody></table>"
-"</div>"
-"<script>(function(){"
-"const $=s=>document.querySelector(s),msgEl=$(\"#msg\"),statsEl=$(\"#stats\"),out=$(\"#out\"),tbody=$(\"#tbl tbody\"),summary=$(\"#summary\"),btnConvert=$(\"#convert\"),btnCopyAll=$(\"#copyAll\"),btnSendAll=$(\"#sendAll\");"
-"function asciiToBytes(str){const a=new Uint8Array(str.length);for(let i=0;i<str.length;i++)a[i]=str.charCodeAt(i)&255;return a}"
-"function padPkcs7(bytes){const rem=bytes.length%16,padLen=rem===0?16:(16-rem);const out=new Uint8Array(bytes.length+padLen);out.set(bytes,0);out.fill(padLen,bytes.length);return out}"
-"function toBlocks(b){const z=[];for(let i=0;i<b.length;i+=16)z.push(b.slice(i,i+16));return z}"
-"function toHexLine(b){return Array.from(b).map(x=>x.toString(16).padStart(2,'0').toUpperCase()).join(' ')}"
-"function toAsciiPrintable(b){return Array.from(b).map(x=>x>=32&&x<=126?String.fromCharCode(x):'.').join('')}"
-"function copy(t){navigator.clipboard.writeText(t).catch(()=>{})}"
-"function sendBlock(i,hex){fetch(`/send?i=${i}&hex=${encodeURIComponent(hex)}`,{method:'GET'})}"
-"function convert(){const text=msgEl.value||\"\";let bytes=asciiToBytes(text);bytes=padPkcs7(bytes);const blocks=toBlocks(bytes);summary.innerHTML=`<strong>Input length:</strong> ${text.length} chars &nbsp;&nbsp; <strong>Blocks:</strong> ${blocks.length} × 16 bytes`;tbody.innerHTML=\"\";let allHex=[];blocks.forEach((blk,i)=>{const ascii=toAsciiPrintable(blk);const hex=toHexLine(blk);allHex.push(hex);const tr=document.createElement('tr');const tdIdx=document.createElement('td');tdIdx.className='right mono';tdIdx.textContent=i;const tdAscii=document.createElement('td');tdAscii.className='mono wrap';tdAscii.textContent=ascii;const tdHex=document.createElement('td');tdHex.className='mono wrap';tdHex.innerHTML=`<code>${hex}</code>`;const tdAct=document.createElement('td');tdAct.className='right';const btn=document.createElement('button');btn.className='ghost';btn.textContent='Send';btn.title=`Send block ${i}`;btn.addEventListener('click',()=>sendBlock(i,hex));tdAct.appendChild(btn);tr.appendChild(tdIdx);tr.appendChild(tdAscii);tr.appendChild(tdHex);tr.appendChild(tdAct);tbody.appendChild(tr)});btnCopyAll.onclick=()=>copy(allHex.join(' '));btnSendAll.onclick=()=>{allHex.forEach((h,i)=>sendBlock(i,h));};out.style.display=blocks.length?\"block\":\"none\"}"
-"msgEl.addEventListener('input',()=>{const n=msgEl.value.length;statsEl.textContent=`${n} char${n===1?'':'s'}`});"
-"btnConvert.addEventListener('click',convert);"
-"msgEl.value=\"\";statsEl.textContent=\"0 chars\";"
+"<div id=\"out\" class=\"card\" style=\"margin-top:16px;display:none;"
+"grid-template-columns:1fr;gap:10px\"></div>"
+"<script>(()=>{"
+"const $=s=>document.querySelector(s);"
+"const msg=$('#msg');const out=$('#out');const stats=$('#stats');"
+"const btnC=$('#convert'),btnS=$('#sendAll'),btnCopy=$('#copyAll');"
+"const blocks=[];"
+"function pkcs7(arr){let r=arr.slice();let pad=16-(r.length%16||16);for(let i=0;i<pad;i++)r.push(pad);return r}"
+"function toBytes(s){return [...s].map(ch=>ch.charCodeAt(0)&255)}"
+"function hex(b){return b.map(x=>x.toString(16).padStart(2,'0')).join(' ')}"
+"function render(){out.style.display=blocks.length?'grid':'none';"
+"out.innerHTML=blocks.map((b,i)=>`"
+"<div class=card><div class=row>"
+"<strong>Block #${i}</strong>"
+"<button data-i=${i} class=send>Send</button>"
+"</div><div><code>${hex(b)}</code></div></div>`).join('');"
+"out.querySelectorAll('.send').forEach(btn=>btn.onclick=()=>sendOne(+btn.dataset.i));}"
+"function sendOne(i){"
+"const xhr=new XMLHttpRequest();"
+"xhr.open('GET',`/send?i=${i}&hex=${hex(blocks[i]).replace(/\\s+/g,'%20')}`);"
+"xhr.onload=()=>{};xhr.onerror=()=>{};xhr.send();}"
+"btnC.onclick=()=>{blocks.length=0;"
+"let raw=toBytes(msg.value);raw=pkcs7(raw);"
+"for(let i=0;i<raw.length;i+=16)blocks.push(raw.slice(i,i+16));render();};"
+"btnS.onclick=()=>{for(let i=0;i<blocks.length;i++)sendOne(i)};"
+"btnCopy.onclick=()=>{navigator.clipboard.writeText(hex(blocks.flat()));};"
+"msg.addEventListener('input',()=>{let n=msg.value.length;"
+"stats.textContent=`${n} char${n===1?'':'s'}`});"
 "})();</script>"
 "</body></html>";
 
-// ---------- tiny parser / utils ----------
+// ----------------- Helpers -----------------
 static inline int line_has_lf(const char *buf) { return strchr(buf, '\n') != NULL; }
 
 static int parse_hex_byte(const char *p, uint8_t *out) {
@@ -120,7 +141,7 @@ static int decode_hex_list(const char *hex, uint8_t *buf, int maxlen) {
   return count;
 }
 
-// ---------- Request handler ----------
+// ----------------- Request handler -----------------
 void processWebRequest(USART_TypeDef *USART)
 {
   char request[BUFF_LEN] = {0};
@@ -141,41 +162,50 @@ void processWebRequest(USART_TypeDef *USART)
   if (strstr(request, " /send?")) {
     uint8_t blk[16] = {0};
     int got = 0;
+    int block_idx = -1;
 
+    // Parse block index
+    const char *pi = strstr(request, "i=");
+    if (pi) block_idx = atoi(pi+2);
+
+    // Parse hex payload
     const char *ph = strstr(request, "hex=");
     if (ph) {
-      // Decode %20 -> space so we can parse "AA BB ..."
-      char hexline[3*16+32] = {0};
-      const char *src = ph+4; char *dst = hexline;
-      while (*src && *src!=' ' && (dst-hexline) < (int)sizeof(hexline)-1) {
-        if (src[0]=='%' && src[1] && src[2]) {
-          char a = src[1], b = src[2];
-          int hv = (isdigit((unsigned char)a)?a-'0':(toupper((unsigned char)a)-'A'+10));
-          hv <<= 4;
-          hv |= (isdigit((unsigned char)b)?b-'0':(toupper((unsigned char)b)-'A'+10));
-          *dst++ = (char)hv;
-          src += 3;
-        } else {
-          *dst++ = *src++;
-        }
+      const char *start = ph + 4;
+      const char *end = strstr(start, " ");
+      int span = end ? (int)(end - start) : (int)strlen(start);
+      char tmp[16*3+1]; // enough for "AA " * 16
+      int copy = (span < (int)sizeof(tmp)-1 ? span : (int)sizeof(tmp)-1);
+      for (int i=0;i<copy;i++) {
+        char c = start[i];
+        tmp[i] = (c=='%' && i+2<copy && start[i+1]=='2' && start[i+2]=='0') ? ' ' : c;
       }
-      *dst = 0;
-      got = decode_hex_list(hexline, blk, 16);
+      tmp[copy] = '\0';
+      got = decode_hex_list(tmp, blk, 16);
     }
 
-    if (got == 16) {
-      // ACK visibly
-      led_blink_short();
-      // Hand off to (optional) SPI path
-      spi_send_block(blk);
+    if (got == 16 && block_idx >= 0 && block_idx < MAX_BLOCKS) {
+      // Store plaintext block
+      memcpy(plaintext_blocks[block_idx], blk, 16);
+
+      // Generate a TRNG key strictly (no dummy fallback)
+      int tr = read_trng(keys[block_idx]);
+      if (tr == 0) {
+        have_block[block_idx] = 1;           // valid only if TRNG succeeded
+        if (block_idx >= total_blocks) total_blocks = block_idx + 1;
+        led_blink_short();                   // success cue
+      } else {
+        have_block[block_idx] = 0;           // do NOT mark valid if TRNG failed
+        led_error_blink();                   // failure cue
+      }
     }
 
     // Minimal response; keeps UI on current page
-    sendString(USART, http_header_no_content);
+    sendString(USART, (char*)http_header_no_content);
     return;
   }
 
   // Otherwise: serve full page
-  sendString(USART, http_header_ok);
-  sendString(USART, webpage);
+  sendString(USART, (char*)http_header_ok);
+  sendString(USART, (char*)webpage);
 }
