@@ -60,7 +60,7 @@
     <folder Name="Source Files">
       <configuration Name="Common" filter="c;cpp;cxx;cc;h;s;asm;inc" />
       <folder Name="lib">
-        <file file_name="../lib/lcd.h" />
+        <file file_name="../lib/lcd_i2c.h" />
         <file file_name="../lib/main.h" />
         <file file_name="../lib/STM32L432KC.h" />
         <file file_name="../lib/STM32L432KC_FLASH.h" />
@@ -70,10 +70,11 @@
         <file file_name="../lib/STM32L432KC_SPI.h" />
         <file file_name="../lib/STM32L432KC_TIM.h" />
         <file file_name="../lib/STM32L432KC_USART.h" />
-        <file file_name="../lib/website.h" />
+        <file file_name="../lib/trng.h" />
+        <file file_name="../lib/webpage.h" />
       </folder>
       <folder Name="src">
-        <file file_name="../src/lcd.c" />
+        <file file_name="../src/lcd_i2c.c" />
         <file file_name="../src/main.c" />
         <file file_name="../src/STM32L432KC_FLASH.c" />
         <file file_name="../src/STM32L432KC_GPIO.c" />
@@ -82,7 +83,8 @@
         <file file_name="../src/STM32L432KC_SPI.c" />
         <file file_name="../src/STM32L432KC_TIM.c" />
         <file file_name="../src/STM32L432KC_USART.c" />
-        <file file_name="../src/website.c" />
+        <file file_name="../src/trng.c" />
+        <file file_name="../src/webpage.c" />
       </folder>
     </folder>
     <folder Name="System Files">

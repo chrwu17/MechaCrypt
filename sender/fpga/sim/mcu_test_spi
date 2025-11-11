@@ -1,0 +1,54 @@
+// Christian Wu
+// chrwu@g.hmc.edu
+// 11/10/25
+
+/////////////////////////////////////////////
+// mcu_test_spi
+//   Simple SPI peripheral to test MCU functionality
+//   Receives 32 bytes (16 plaintext + 16 key)
+//   Just echoes back the plaintext for verification
+/////////////////////////////////////////////
+
+module mcu_test_spi(
+    input  logic sck,           // SPI clock
+    input  logic sdi,           // SPI data in (COPI)
+    output logic sdo,           // SPI data out (CIPO)
+    input  logic load,          // Load signal (active high during input phase)
+    output logic done           // Done signal (asserted when ready to output)
+);
+
+    logic [127:0] plaintext;
+    logic [127:0] key;
+    logic [8:0]   bit_count;    // Count bits received
+    logic         sdodelayed;
+    
+    // Bit counter
+    always_ff @(posedge sck or posedge load) begin
+        if (load)
+            bit_count <= 9'd0;
+        else
+            bit_count <= bit_count + 9'd1;
+    end
+    
+    // Assert done when we've received all 256 bits and load is low
+    assign done = (bit_count >= 9'd256) && !load;
+    
+    // Shift in plaintext and key on rising edge
+    always_ff @(posedge sck) begin
+        if (load) begin
+            {plaintext, key} <= {plaintext[126:0], key, sdi};
+        end else begin
+            // During output, shift plaintext back out
+            plaintext <= {plaintext[126:0], 1'b0};
+        end
+    end
+    
+    // Shift out plaintext on falling edge
+    always_ff @(negedge sck) begin
+        if (done)
+            sdodelayed <= plaintext[127];
+    end
+    
+    assign sdo = sdodelayed;
+
+endmodule
