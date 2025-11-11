@@ -1,32 +1,40 @@
 /*
  * File: main.c
- * Author: MechaCrypt - LED-only status (no UART/RTT debug prints)
+ * Mode: LED-only status, TRNG + SPI + LOAD/DONE handshake
  *
- * LED patterns:
- *   - Power-on check: 2 × 200 ms blinks (verifies timer is sane)
- *   - TRNG OK:        2 × 500 ms blinks
- *   - TRNG FAIL:      3 × 100 ms blinks
+ * Flow:
+ *  - Boot: short LED blinks to verify timer feels right.
+ *  - TRNG init: 2 long blinks on success; 3 fast blinks on failure (still runs).
+ *  - Web requests: /send stores plaintext, generates a TRNG key per block.
+ *  - SPI send:
+ *      * First block is sent immediately when its /send occurs.
+ *      * Thereafter, each DONE (PA6) from the FPGA triggers the next block send.
  *
- * Notes:
- *   - Assumes TIM15 delay_millis() uses a correct ms timebase (fixed in STM32L432KC_TIM.c).
- *   - Assumes trng.c enables HSI48 and selects CLK48 correctly before enabling RNG.
- *   - USART1 remains used for the web server only; no prints are emitted.
+ * No debug prints, no changes to GPIO/USART/SPI driver files.
  */
 
 #include "../lib/main.h"
 #include "../lib/webpage.h"
-#include "../lib/STM32L432KC_GPIO.h"
-#include "../lib/STM32L432KC_USART.h"
-#include "../lib/STM32L432KC_TIM.h"
 #include "../lib/STM32L432KC.h"
+#include "../lib/STM32L432KC_TIM.h"
+#include "../lib/STM32L432KC_USART.h"
 #include "../lib/trng.h"
+
+static inline void led_on(void){  digitalWrite(LED_PIN, 1); }
+static inline void led_off(void){ digitalWrite(LED_PIN, 0); }
+
+// Small visual cue helpers
+static void blink_short(uint32_t ms){ led_on();  delay_millis(TIM15, ms); led_off(); delay_millis(TIM15, ms); }
+static void blink_count(uint32_t on_ms, uint32_t off_ms, int n){
+  for(int i=0;i<n;i++){ led_on(); delay_millis(TIM15, on_ms); led_off(); delay_millis(TIM15, off_ms); }
+}
 
 int main(void) {
   // Core clocks and flash latency
   configureFlash();
   configureClock();
 
-  // Enable GPIO ports
+  // Enable GPIO ports (A/B/C)
   gpioEnable(GPIO_PORT_A);
   gpioEnable(GPIO_PORT_B);
   gpioEnable(GPIO_PORT_C);
@@ -37,32 +45,31 @@ int main(void) {
   // Timer for millisecond delays (TIM15)
   initTIM(TIM15);
 
+  // Power-on sanity blinks (confirm delays feel like real ms)
+  blink_short(200);
+  blink_short(200);
+
   // Bring up USART for the web server (no debug prints)
   USART_TypeDef *USART = initUSART(USART1_ID, 125000);
 
-  // TRNG initialization (LED-only status)
+  // Bring up TRNG (LED-only status)
   int trng_status = initTRNG();
   if (trng_status == 0) {
     // TRNG OK: 2 long blinks
-    for (int j = 0; j < 2; j++) {
-      digitalWrite(LED_PIN, 1);
-      delay_millis(TIM15, 500);
-      digitalWrite(LED_PIN, 0);
-      delay_millis(TIM15, 500);
-    }
+    blink_count(500, 500, 2);
   } else {
-    // TRNG FAIL: 3 fast blinks
-    for (int j = 0; j < 3; j++) {
-      digitalWrite(LED_PIN, 1);
-      delay_millis(TIM15, 100);
-      digitalWrite(LED_PIN, 0);
-      delay_millis(TIM15, 100);
-    }
-    // Keep running: webpage /send will return 500 if TRNG isn't working.
+    // TRNG FAIL: 3 fast blinks (keep running; /send will fail)
+    blink_count(100, 100, 3);
   }
 
-  // Main loop: serve page and handle /send requests
+  // Configure SPI and handshake pins (LOAD/DONE)
+  mechacrypt_init_io_and_spi();
+
+  // Main loop:
+  //  - service HTTP
+  //  - poll DONE and advance queued block sends (if any)
   while (1) {
     processWebRequest(USART);
+    mechacrypt_poll_and_advance();
   }
 }

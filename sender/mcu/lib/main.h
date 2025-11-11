@@ -2,31 +2,29 @@
 #define MAIN_H
 
 #include <stdint.h>
-#include <stddef.h>
-#include <stm32l432xx.h>
 #include "STM32L432KC.h"
-#include "webpage.h"
+#include "STM32L432KC_GPIO.h"
+#include "STM32L432KC_USART.h"
+#include "STM32L432KC_TIM.h"
 
-// ===== App constants =====
+// ===== Project-wide constants =====
+#define LED_PIN        PB3         // Adjust to your board's LED if different
+#define LOAD_PIN       PA5          // MCU -> FPGA (start/load)
+#define DONE_PIN       PA6          // FPGA -> MCU (done signal)
 
-#define BUFF_LEN        256
+#define MAX_BLOCKS     64           // number of blocks UI can stage
+#define BUFF_LEN       512          // HTTP request line buffer
 
-// LED Pin - using GPIO library pin numbering (PB3 = 19)
-#define LED_PIN PB3   // or just use 19 if PB3 isn't defined
+// ===== System bring-up (provided elsewhere) =====
+void configureFlash(void);
+void configureClock(void);
 
-#define MAX_BLOCKS      100
+// ===== Web handling =====
+void processWebRequest(USART_TypeDef *USART);
 
-#define GPIO_PORT_A     0
-#define GPIO_PORT_B     1
-#define GPIO_PORT_C     2
-
-#define GPIO_OUTPUT     1
-#define GPIO_INPUT      0
-
-// ===== Shared global variables =====
-extern uint8_t plaintext_blocks[MAX_BLOCKS][16];
-extern uint8_t keys[MAX_BLOCKS][16];
-extern uint8_t have_block[MAX_BLOCKS];
-extern volatile uint16_t total_blocks;
+// ===== SPI / Handshake helpers (implemented in webpage.c) =====
+void mechacrypt_init_io_and_spi(void);       // config LOAD/DONE pins + initSPI
+void mechacrypt_poll_and_advance(void);      // poll DONE and send next ready block (if any)
+void mechacrypt_maybe_start_after_block(int block_idx); // start send if this was first block (idx 0)
 
 #endif // MAIN_H

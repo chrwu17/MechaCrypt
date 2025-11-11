@@ -1,33 +1,35 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 09/30/25
-
-// Taken from the E155 Course Website and Modified
-
-// STM32F401RE_TIM.c
-// TIM functions
-
 #include "../lib/STM32L432KC_TIM.h"
 #include "../lib/STM32L432KC_RCC.h"
 
-void initTIM(TIM_TypeDef * TIMx){
-  RCC->APB2ENR |= (RCC_APB2ENR_TIM15EN);
-  // Set prescaler to give 1 ms time base
-  uint32_t psc_div = (uint32_t) ((SystemCoreClock/1e3));
+#define TIM_BASE_HZ 100000u  // 100 kHz tick (10 us per tick)
 
-  // Set prescaler division factor
-  TIMx->PSC = (psc_div - 1);
-  // Generate an update event to update prescaler value
-  TIMx->EGR |= 1;
-  // Enable counter
-  TIMx->CR1 |= 1; // Set CEN = 1
+void initTIM(TIM_TypeDef * TIMx){
+  // Enable TIM15 clock (APB2)
+  RCC->APB2ENR |= (RCC_APB2ENR_TIM15EN);
+
+  // Prescale to ~100 kHz: PSC = (SystemCoreClock / TIM_BASE_HZ) - 1
+  uint32_t psc = (uint32_t)(SystemCoreClock / TIM_BASE_HZ);
+  if (psc == 0) psc = 1;     // safety
+  TIMx->PSC = (uint16_t)(psc - 1);
+
+  TIMx->EGR |= 1;            // UG: latch PSC
+  TIMx->CR1 |= 1;            // CEN
 }
 
+// Blocks for 'ms' milliseconds by using 100 kHz base (ARR in 'ticks' = ms * 100)
 void delay_millis(TIM_TypeDef * TIMx, uint32_t ms){
-  TIMx->ARR = ms;// Set timer max count
-  TIMx->EGR |= 1;     // Force update
-  TIMx->SR &= ~(0x1); // Clear UIF
-  TIMx->CNT = 0;      // Reset count
+  while (ms) {
+    // handle up to ~655 ms per chunk at 100 kHz
+    uint32_t chunk_ms = (ms > 655) ? 655 : ms;
+    uint32_t ticks = chunk_ms * (TIM_BASE_HZ / 1000u); // ms * 100 = ticks
 
-  while(!(TIMx->SR & 1)); // Wait for UIF to go high
+    TIMx->ARR = (uint16_t)ticks;
+    TIMx->EGR |= 1;     // UG
+    TIMx->SR &= ~(0x1); // clear UIF
+    TIMx->CNT = 0;
+
+    while(!(TIMx->SR & 1)) { /* wait */ }
+
+    ms -= chunk_ms;
+  }
 }

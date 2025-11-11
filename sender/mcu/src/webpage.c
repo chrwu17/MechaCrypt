@@ -2,6 +2,7 @@
 #include "../lib/STM32L432KC_USART.h"
 #include "../lib/STM32L432KC_GPIO.h"
 #include "../lib/STM32L432KC_TIM.h"
+#include "../lib/STM32L432KC_SPI.h"
 #include "../lib/STM32L432KC.h"
 #include "../lib/main.h"
 #include "../lib/trng.h"
@@ -15,14 +16,22 @@ uint8_t keys[MAX_BLOCKS][16];
 uint8_t have_block[MAX_BLOCKS];
 volatile uint16_t total_blocks = 0;
 
-// ----------------- LED blink with timer delays -----------------
+// ------------ Transmit state machine (SPI + LOAD/DONE) ------------
+typedef enum {
+  TX_IDLE = 0,
+  TX_WAIT_DONE
+} tx_state_t;
+
+static volatile tx_state_t tx_state = TX_IDLE;
+static volatile int current_idx = -1;     // index of block currently sent (awaiting DONE)
+static volatile int next_idx = 0;         // next candidate index to send
+
+// LED cues (reuse same style as elsewhere)
 static void led_blink_short(void) {
   digitalWrite(LED_PIN, 1);
   delay_millis(TIM15, 150);
   digitalWrite(LED_PIN, 0);
 }
-
-// Error blink (3 fast blinks)
 static void led_error_blink(void) {
   for (int j = 0; j < 3; j++) {
     digitalWrite(LED_PIN, 1);
@@ -49,7 +58,7 @@ const char webpage[] =
 "body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;line-height:1.35}"
 "h1{font-size:1.25rem;margin:0 0 10px}"
 ".overline{font-size:.9rem;font-weight:700;letter-spacing:.04em;color:var(--muted);margin:0 0 4px}"
-".card{border:1px solid var(--edge);border-radius:12px;padding:16px;box-shadow:0 1px 6px rgba(0,0,0,04)}"
+".card{border:1px solid var(--edge);border-radius:12px;padding:16px;box-shadow:0 1px 6px rgba(0,0,0,.04)}"
 "label{display:block;font-weight:600;margin-bottom:6px}"
 "textarea{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:10px;border:1px solid var(--edge);font:inherit;resize:vertical;min-height:90px}"
 ".row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px}"
@@ -59,7 +68,7 @@ const char webpage[] =
 "table{width:100%;border-collapse:collapse;margin-top:16px}"
 "th,td{border:1px solid var(--edge);padding:8px 10px;text-align:left}"
 "th{background:#fafafa}"
-"code,mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}"
+"code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}"
 ".right{text-align:right}"
 ".wrap{word-break:break-word}"
 ".pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border:1px solid var(--edge);border-radius:999px}"
@@ -79,39 +88,32 @@ const char webpage[] =
 "    <button id=\"copyAll\" class=\"ghost\" title=\"Copy all hex bytes (space-separated)\">Copy All Hex</button>"
 "  </div>"
 "</div>"
-"<div id=\"out\" class=\"card\" style=\"margin-top:16px;display:none;"
-"grid-template-columns:1fr;gap:10px\"></div>"
-"<script>(()=>{"
-"const $=s=>document.querySelector(s);"
-"const msg=$('#msg');const out=$('#out');const stats=$('#stats');"
-"const btnC=$('#convert'),btnS=$('#sendAll'),btnCopy=$('#copyAll');"
-"const blocks=[];"
-"function pkcs7(arr){let r=arr.slice();let pad=16-(r.length%16||16);for(let i=0;i<pad;i++)r.push(pad);return r}"
-"function toBytes(s){return [...s].map(ch=>ch.charCodeAt(0)&255)}"
-"function hex(b){return b.map(x=>x.toString(16).padStart(2,'0')).join(' ')}"
-"function render(){out.style.display=blocks.length?'grid':'none';"
-"out.innerHTML=blocks.map((b,i)=>`"
-"<div class=card><div class=row>"
-"<strong>Block #${i}</strong>"
-"<button data-i=${i} class=send>Send</button>"
-"</div><div><code>${hex(b)}</code></div></div>`).join('');"
-"out.querySelectorAll('.send').forEach(btn=>btn.onclick=()=>sendOne(+btn.dataset.i));}"
-"function sendOne(i){"
-"const xhr=new XMLHttpRequest();"
-"xhr.open('GET',`/send?i=${i}&hex=${hex(blocks[i]).replace(/\\s+/g,'%20')}`);"
-"xhr.onload=()=>{};xhr.onerror=()=>{};xhr.send();}"
-"btnC.onclick=()=>{blocks.length=0;"
-"let raw=toBytes(msg.value);raw=pkcs7(raw);"
-"for(let i=0;i<raw.length;i+=16)blocks.push(raw.slice(i,i+16));render();};"
-"btnS.onclick=()=>{for(let i=0;i<blocks.length;i++)sendOne(i)};"
-"btnCopy.onclick=()=>{navigator.clipboard.writeText(hex(blocks.flat()));};"
-"msg.addEventListener('input',()=>{let n=msg.value.length;"
-"stats.textContent=`${n} char${n===1?'':'s'}`});"
+"<div id=\"out\" class=\"card\" style=\"margin-top:16px;display:none;\">"
+"  <div id=\"summary\" class=\"muted\"></div>"
+"  <table id=\"tbl\"><thead>"
+"    <tr><th class=\"right\">Block #</th><th>ASCII (printable)</th><th>Hex bytes</th><th class=\"right\">Actions</th></tr>"
+"  </thead><tbody></tbody></table>"
+"</div>"
+"<script>(function(){"
+"const $=s=>document.querySelector(s),msgEl=$(\"#msg\"),statsEl=$(\"#stats\"),out=$(\"#out\"),tbody=$(\"#tbl tbody\"),summary=$(\"#summary\"),btnConvert=$(\"#convert\"),btnCopyAll=$(\"#copyAll\"),btnSendAll=$(\"#sendAll\");"
+"function asciiToBytes(str){const a=new Uint8Array(str.length);for(let i=0;i<str.length;i++)a[i]=str.charCodeAt(i)&255;return a}"
+"function padPkcs7(bytes){const rem=bytes.length%16,padLen=rem===0?16:(16-rem);const out=new Uint8Array(bytes.length+padLen);out.set(bytes,0);out.fill(padLen,bytes.length);return out}"
+"function toBlocks(b){const z=[];for(let i=0;i<b.length;i+=16)z.push(b.slice(i,i+16));return z}"
+"function toHexLine(b){return Array.from(b).map(x=>x.toString(16).padStart(2,'0').toUpperCase()).join(' ')}"
+"function toAsciiPrintable(b){return Array.from(b).map(x=>x>=32&&x<=126?String.fromCharCode(x):'.').join('')}"
+"function copy(t){navigator.clipboard.writeText(t).catch(()=>{})}"
+"function sendBlock(i,hex){fetch(`/send?i=${i}&hex=${encodeURIComponent(hex)}`,{method:'GET'})}"
+"function convert(){const text=msgEl.value||\"\";let bytes=asciiToBytes(text);bytes=padPkcs7(bytes);const blocks=toBlocks(bytes);summary.innerHTML=`<strong>Input length:</strong> ${text.length} chars &nbsp;&nbsp; <strong>Blocks:</strong> ${blocks.length} × 16 bytes`;tbody.innerHTML=\"\";let allHex=[];blocks.forEach((blk,i)=>{const ascii=toAsciiPrintable(blk);const hex=toHexLine(blk);allHex.push(hex);const tr=document.createElement('tr');const tdIdx=document.createElement('td');tdIdx.className='right mono';tdIdx.textContent=i;const tdAscii=document.createElement('td');tdAscii.className='mono wrap';tdAscii.textContent=ascii;const tdHex=document.createElement('td');tdHex.className='mono wrap';tdHex.innerHTML=`<code>${hex}</code>`;const tdAct=document.createElement('td');tdAct.className='right';const btn=document.createElement('button');btn.className='ghost';btn.textContent='Send';btn.title=`Send block ${i}`;btn.addEventListener('click',()=>sendBlock(i,hex));tdAct.appendChild(btn);tr.appendChild(tdIdx);tr.appendChild(tdAscii);tr.appendChild(tdHex);tr.appendChild(tdAct);tbody.appendChild(tr)});btnCopyAll.onclick=()=>copy(allHex.join(' '));btnSendAll.onclick=()=>{allHex.forEach((h,i)=>sendBlock(i,h));};out.style.display=blocks.length?\"block\":\"none\"}"
+"msgEl.addEventListener('input',()=>{const n=msgEl.value.length;statsEl.textContent=`${n} char${n===1?'':'s'}`});"
+"btnConvert.addEventListener('click',convert);"
+"msgEl.value=\"\";statsEl.textContent=\"0 chars\";"
 "})();</script>"
 "</body></html>";
 
 // ----------------- Helpers -----------------
-static inline int line_has_lf(const char *buf) { return strchr(buf, '\n') != NULL; }
+static inline int line_has_lf(const char *buf) { 
+  return strchr(buf, '\n') != NULL; 
+}
 
 static int parse_hex_byte(const char *p, uint8_t *out) {
   int v = 0;
@@ -141,6 +143,91 @@ static int decode_hex_list(const char *hex, uint8_t *buf, int maxlen) {
   return count;
 }
 
+// ----------------- SPI + handshake core -----------------
+static inline int done_is_high(void) {
+  return (digitalRead(DONE_PIN) != 0);
+}
+
+static void spi_send_pair_blocking(const uint8_t *pt16, const uint8_t *key16) {
+  // Protocol: LOAD high, CS low, send 16 pt + 16 key, CS high, LOAD low
+  digitalWrite(LOAD_PIN, 1);
+  digitalWrite(SPI_CE, 0);
+
+  for (int i=0;i<16;i++) (void)spiSendReceive((char)pt16[i]);
+  for (int i=0;i<16;i++) (void)spiSendReceive((char)key16[i]);
+
+  digitalWrite(SPI_CE, 1);
+  digitalWrite(LOAD_PIN, 0);
+}
+
+// Start sending the block at index 'i' if valid
+static void start_send_if_valid(int i) {
+  if (i < 0 || i >= (int)total_blocks) return;
+  if (!have_block[i]) return;
+
+  spi_send_pair_blocking(plaintext_blocks[i], keys[i]);
+  current_idx = i;
+  next_idx = i + 1;
+  tx_state = TX_WAIT_DONE;
+  // visual ack of TX start
+  led_blink_short();
+}
+
+// Find the next ready block >= next_idx and start it; otherwise go idle
+static void try_send_next_ready(void) {
+  for (int i = next_idx; i < (int)total_blocks; i++) {
+    if (have_block[i]) {
+      start_send_if_valid(i);
+      return;
+    }
+  }
+  // none left
+  tx_state = TX_IDLE;
+  current_idx = -1;
+}
+
+// ----------------- Public: init IO + SPI -----------------
+void mechacrypt_init_io_and_spi(void) {
+  // Configure handshake pins
+  pinMode(LOAD_PIN, GPIO_OUTPUT);  digitalWrite(LOAD_PIN, 0);
+  pinMode(DONE_PIN, GPIO_INPUT);   // external pull preferred on FPGA board
+
+  // SPI is already provided; pick reasonable defaults: BR=0b011 (~ clk/16), CPOL=0, CPHA=0
+  initSPI(0b011, 0, 0);
+
+  // Ensure CS idle high (SPI driver made SPI_CE output)
+  digitalWrite(SPI_CE, 1);
+
+  // Clear state
+  tx_state = TX_IDLE;
+  current_idx = -1;
+  next_idx = 0;
+}
+
+// ----------------- Public: main-loop poll -----------------
+void mechacrypt_poll_and_advance(void) {
+  if (tx_state == TX_WAIT_DONE) {
+    // Wait for DONE high from FPGA
+    if (done_is_high()) {
+      // Debounce-ish: brief wait for stable, then proceed
+      delay_millis(TIM15, 1);
+      if (done_is_high()) {
+        // DONE observed: move to next block
+        tx_state = TX_IDLE;       // drop to IDLE first
+        try_send_next_ready();    // will set WAIT_DONE if it starts one
+      }
+    }
+  }
+}
+
+// ----------------- Public: Start after a specific block if it's the first -----------------
+void mechacrypt_maybe_start_after_block(int block_idx) {
+  // If this is the very first block (index 0) and we're idle, start immediately.
+  if (block_idx == 0 && tx_state == TX_IDLE) {
+    start_send_if_valid(0);
+  }
+}
+
 // ----------------- Request handler -----------------
 void processWebRequest(USART_TypeDef *USART)
 {
@@ -166,37 +253,48 @@ void processWebRequest(USART_TypeDef *USART)
 
     // Parse block index
     const char *pi = strstr(request, "i=");
-    if (pi) block_idx = atoi(pi+2);
+    if (pi) {
+      block_idx = atoi(pi+2);
+    }
 
-    // Parse hex payload
     const char *ph = strstr(request, "hex=");
     if (ph) {
-      const char *start = ph + 4;
-      const char *end = strstr(start, " ");
-      int span = end ? (int)(end - start) : (int)strlen(start);
-      char tmp[16*3+1]; // enough for "AA " * 16
-      int copy = (span < (int)sizeof(tmp)-1 ? span : (int)sizeof(tmp)-1);
-      for (int i=0;i<copy;i++) {
-        char c = start[i];
-        tmp[i] = (c=='%' && i+2<copy && start[i+1]=='2' && start[i+2]=='0') ? ' ' : c;
+      // Decode %20 -> space so we can parse "AA BB ..."
+      char hexline[3*16+32] = {0};
+      const char *src = ph+4; 
+      char *dst = hexline;
+      while (*src && *src!=' ' && (dst-hexline) < (int)sizeof(hexline)-1) {
+        if (src[0]=='%' && src[1] && src[2]) {
+          char a = src[1], b = src[2];
+          int hv = (isdigit((unsigned char)a)?a-'0':(toupper((unsigned char)a)-'A'+10));
+          hv <<= 4;
+          hv |= (isdigit((unsigned char)b)?b-'0':(toupper((unsigned char)b)-'A'+10));
+          *dst++ = (char)hv;
+          src += 3;
+        } else {
+          *dst++ = *src++;
+        }
       }
-      tmp[copy] = '\0';
-      got = decode_hex_list(tmp, blk, 16);
+      *dst = 0;
+      got = decode_hex_list(hexline, blk, 16);
     }
 
     if (got == 16 && block_idx >= 0 && block_idx < MAX_BLOCKS) {
       // Store plaintext block
       memcpy(plaintext_blocks[block_idx], blk, 16);
-
-      // Generate a TRNG key strictly (no dummy fallback)
-      int tr = read_trng(keys[block_idx]);
-      if (tr == 0) {
-        have_block[block_idx] = 1;           // valid only if TRNG succeeded
+      
+      // TRNG-only: generate key; mark valid only on success
+      int trng_result = read_trng(keys[block_idx]);
+      if (trng_result == 0) {
+        have_block[block_idx] = 1;
         if (block_idx >= total_blocks) total_blocks = block_idx + 1;
-        led_blink_short();                   // success cue
+        led_blink_short();  // success: staged
+
+        // If this is the very first block, kick off SPI immediately
+        mechacrypt_maybe_start_after_block(block_idx);
       } else {
-        have_block[block_idx] = 0;           // do NOT mark valid if TRNG failed
-        led_error_blink();                   // failure cue
+        have_block[block_idx] = 0;
+        led_error_blink();  // TRNG failed
       }
     }
 
