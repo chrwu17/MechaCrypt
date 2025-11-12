@@ -11,9 +11,9 @@ module aesDecryption(
            input  logic clk,
            input  logic sck, 
            input  logic sdi,
-           output logic sdo,
            input  logic load,
-           output logic done);
+           output logic sdo,
+           output logic done_decrypt);
                     
     logic [127:0] key, plaintext, cyphertext;
     logic clk;
@@ -28,9 +28,9 @@ module aesDecryption(
     // Internal high-speed oscillator to generate slow clock
     HSOSC hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
             
-    aes_spi spi(sck, sdi, sdo, done, key, plaintext, cyphertext);
+    aes_spi spi(sck, sdi, sdo, done_decrypt, key, cyphertext, plaintext);
 
-    aes_core core(clk, load, key, plaintext, done, cyphertext);
+    aes_core core(clk, load_sync, key, cyphertext, done_decrypt, plaintext);
 endmodule
 
 /////////////////////////////////////////////
@@ -44,30 +44,30 @@ module aes_spi(input  logic sck,
                input  logic sdi,
                output logic sdo,
                input  logic done,
-               output logic [127:0] key, plaintext,
-               input  logic [127:0] cyphertext);
+               output logic [127:0] key, cyphertext,
+               input  logic [127:0] plaintext);
 
     logic         sdodelayed, wasdone;
-    logic [127:0] cyphertextcaptured;
+    logic [127:0] plaintextcaptured;
                
     // assert load
-    // apply 256 sclks to shift in key and plaintext, starting with plaintext[127]
+    // apply 256 sclks to shift in key and cyphertext, starting with cyphertext[127]
     // then deassert load, wait until done
-    // then apply 128 sclks to shift out cyphertext, starting with cyphertext[127]
+    // then apply 128 sclks to shift out plaintext, starting with plaintext[127]
     // SPI mode is equivalent to cpol = 0, cpha = 0 since data is sampled on first edge and the first
     // edge is a rising edge (clock going from low in the idle state to high).
     always_ff @(posedge sck)
-        if (!wasdone)  {cyphertextcaptured, plaintext, key} = {cyphertext, plaintext[126:0], key, sdi};
-        else           {cyphertextcaptured, plaintext, key} = {cyphertextcaptured[126:0], plaintext, key, sdi}; 
+        if (!wasdone)  {plaintextcaptured, cyphertext, key} = {plaintext, cyphertext[126:0], key, sdi};
+        else           {plaintextcaptured, cyphertext, key} = {plaintextcaptured[126:0], cyphertext, key, sdi}; 
     
     // sdo should change on the negative edge of sck
     always_ff @(negedge sck) begin
         wasdone = done;
-        sdodelayed = cyphertextcaptured[126];
+        sdodelayed = plaintextcaptured[126];
     end
     
     // when done is first asserted, shift out msb before clock edge
-    assign sdo = (done & !wasdone) ? cyphertext[127] : sdodelayed;
+    assign sdo = (done & !wasdone) ? plaintext[127] : sdodelayed;
 endmodule
 
 
@@ -88,7 +88,7 @@ endmodule
 
 module aes_core(
     input  logic         clk, 
-    input  logic         decrypt,           // NEW
+    input  logic         load,
     input  logic [127:0] key, 
     input  logic [127:0] cyphertext,        // NEW
     output logic         done_decrypt,      // NEW
@@ -118,7 +118,7 @@ module aes_core(
     logic [10:0][127:0] roundKeys, premixedKeys;
 
     always_ff @(posedge clk) begin
-        if (decrypt) begin
+        if (load) begin
             roundCount <= 10;
             cycleCount <= 0;
             done_decrypt <= 0;
@@ -162,7 +162,10 @@ module aes_core(
             if (roundCount == 10) begin
                 if (cycleCount == 0) begin
                     // Use raw K10 for initial pass
-                    word <= {roundKeys[10][127:96], roundKeys[10][95:64], roundKeys[10][63:32], roundKeys[10][31:0]};
+                    word <= {roundKeys[10][127:96], 
+                             roundKeys[10][95:64], 
+                             roundKeys[10][63:32], 
+                             roundKeys[10][31:0]};
                 end if (cycleCount == 3) begin
                     state <= afterAdd; // First state
                 end
@@ -172,12 +175,16 @@ module aes_core(
             if ((roundCount > 0) && (roundCount < 10)) begin
                 if (cycleCount == 0) begin
                     // Use premixed keys for rounds 1..9
-                    word <= {premixedKeys[roundCount][127:96], premixedKeys[roundCount][95:64], premixedKeys[roundCount][63:32], premixedKeys[roundCount][31:0]};
-                end if (cycleCount == 1) begin // one-cycle delay for sbox
+                    word <= {premixedKeys[roundCount][127:96], 
+                             premixedKeys[roundCount][95:64], 
+                             premixedKeys[roundCount][63:32], 
+                             premixedKeys[roundCount][31:0]};
                     bfrSub <= state;
-                end if (cycleCount == 2) begin
+                end 
+                if (cycleCount == 2) begin
                     bfrAdd <= afterMix;
-                end if (cycleCount == 3) begin
+                end 
+                if (cycleCount == 3) begin
                     state <= afterAdd; // Next state
                 end
             end 
@@ -186,12 +193,16 @@ module aes_core(
             if (roundCount == 0) begin
                 if (cycleCount == 0) begin
                     // Use raw K0 for final round
-                    word <= {roundKeys[0][127:96], roundKeys[0][95:64], roundKeys[0][63:32], roundKeys[0][31:0]};
-                end if (cycleCount == 1) begin
+                    word <= {roundKeys[0][127:96], 
+                             roundKeys[0][95:64], 
+                             roundKeys[0][63:32], 
+                             roundKeys[0][31:0]};
                     bfrSub <= state;
-                end if (cycleCount == 2) begin
+                end 
+                if (cycleCount == 2) begin
                     bfrAdd <= afterShift; // Skip mixcolumns
-                end if (cycleCount == 3) begin
+                end 
+                if (cycleCount == 3) begin
                     plaintext <= afterAdd;
                     done_decrypt <= 1;
                 end
