@@ -1,14 +1,15 @@
-// MechaCrypt Sender: static webpage over UART (PKCS#7 client-side tool)
 #ifndef WEBPAGE_H
 #define WEBPAGE_H
 
 #include <stdint.h>
-#include <stm32l432xx.h>
+#include "STM32L432KC_USART.h"
 
-// Single static page (sent on every request)
-extern const char webpage[];
-
-// Minimal request handler: wait for one line, then send the page
+// HTML server & request handler
 void processWebRequest(USART_TypeDef *USART);
 
-#endif
+// SPI + handshake (exposed to main.c)
+void mechacrypt_init_io_and_spi(void);
+void mechacrypt_poll_and_advance(void);
+void mechacrypt_maybe_start_after_block(int block_idx);
+
+#endif // WEBPAGE_H
