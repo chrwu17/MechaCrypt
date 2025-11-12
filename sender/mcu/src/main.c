@@ -49,7 +49,7 @@ int main(void) {
   blink_short(200);
   blink_short(200);
 
-  // Bring up USART for the web server (no debug prints)
+  // Bring up USART for the web server
   USART_TypeDef *USART = initUSART(USART1_ID, 125000);
 
   // Bring up TRNG (LED-only status)

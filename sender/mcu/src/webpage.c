@@ -11,10 +11,14 @@
 #include <stdlib.h>
 
 // ----------------- Shared state -----------------
-uint8_t plaintext_blocks[MAX_BLOCKS][16];
-uint8_t keys[MAX_BLOCKS][16];
-uint8_t have_block[MAX_BLOCKS];
+volatile uint8_t plaintext_blocks[MAX_BLOCKS][16];
+volatile uint8_t keys[MAX_BLOCKS][16];
+volatile uint8_t have_block[MAX_BLOCKS];
 volatile uint16_t total_blocks = 0;
+volatile uint16_t debug_request_count = 0;  // Track # of requests received
+volatile int debug_last_block_idx = -1;     // Last block index parsed
+volatile int debug_last_got_bytes = 0;      // How many bytes decoded
+volatile int debug_last_trng_result = -99;  // Last TRNG result
 
 // ------------ Transmit state machine (SPI + LOAD/DONE) ------------
 typedef enum {
@@ -65,6 +69,7 @@ const char webpage[] =
 ".muted{color:var(--muted)}"
 "button{padding:10px 14px;border-radius:10px;border:1px solid var(--edge);cursor:pointer;background:#111;color:#fff;font-weight:600}"
 "button.ghost{background:#fff;color:#111}"
+"button:disabled{opacity:0.6;cursor:not-allowed}"
 "table{width:100%;border-collapse:collapse;margin-top:16px}"
 "th,td{border:1px solid var(--edge);padding:8px 10px;text-align:left}"
 "th{background:#fafafa}"
@@ -84,28 +89,30 @@ const char webpage[] =
 "    <span class=\"pill\"><strong>Encoding:</strong> ASCII (bytes = char codes 0–255)</span>"
 "    <span class=\"muted\" id=\"stats\">0 chars</span>"
 "    <button id=\"convert\">Convert</button>"
-"    <button id=\"sendAll\" class=\"ghost\" title=\"Send all blocks to MCU\">Send All</button>"
+"    <button id=\"sendAll\" class=\"ghost\" title=\"Send all blocks to MCU memory\">Load to MCU</button>"
+"    <button id=\"startSPI\" class=\"ghost\" title=\"Start SPI transmission to FPGA\" style=\"display:none;\">Start Transmission</button>"
 "    <button id=\"copyAll\" class=\"ghost\" title=\"Copy all hex bytes (space-separated)\">Copy All Hex</button>"
 "  </div>"
 "</div>"
 "<div id=\"out\" class=\"card\" style=\"margin-top:16px;display:none;\">"
 "  <div id=\"summary\" class=\"muted\"></div>"
 "  <table id=\"tbl\"><thead>"
-"    <tr><th class=\"right\">Block #</th><th>ASCII (printable)</th><th>Hex bytes</th><th class=\"right\">Actions</th></tr>"
+"    <tr><th class=\"right\">Block #</th><th>ASCII (printable)</th><th>Hex bytes</th></tr>"
 "  </thead><tbody></tbody></table>"
 "</div>"
 "<script>(function(){"
-"const $=s=>document.querySelector(s),msgEl=$(\"#msg\"),statsEl=$(\"#stats\"),out=$(\"#out\"),tbody=$(\"#tbl tbody\"),summary=$(\"#summary\"),btnConvert=$(\"#convert\"),btnCopyAll=$(\"#copyAll\"),btnSendAll=$(\"#sendAll\");"
+"const $=s=>document.querySelector(s),msgEl=$(\"#msg\"),statsEl=$(\"#stats\"),out=$(\"#out\"),tbody=$(\"#tbl tbody\"),summary=$(\"#summary\"),btnConvert=$(\"#convert\"),btnCopyAll=$(\"#copyAll\"),btnSendAll=$(\"#sendAll\"),btnStartSPI=$(\"#startSPI\");"
 "function asciiToBytes(str){const a=new Uint8Array(str.length);for(let i=0;i<str.length;i++)a[i]=str.charCodeAt(i)&255;return a}"
 "function padPkcs7(bytes){const rem=bytes.length%16,padLen=rem===0?16:(16-rem);const out=new Uint8Array(bytes.length+padLen);out.set(bytes,0);out.fill(padLen,bytes.length);return out}"
 "function toBlocks(b){const z=[];for(let i=0;i<b.length;i+=16)z.push(b.slice(i,i+16));return z}"
 "function toHexLine(b){return Array.from(b).map(x=>x.toString(16).padStart(2,'0').toUpperCase()).join(' ')}"
 "function toAsciiPrintable(b){return Array.from(b).map(x=>x>=32&&x<=126?String.fromCharCode(x):'.').join('')}"
 "function copy(t){navigator.clipboard.writeText(t).catch(()=>{})}"
-"function sendBlock(i,hex){fetch(`/send?i=${i}&hex=${encodeURIComponent(hex)}`,{method:'GET'})}"
-"function convert(){const text=msgEl.value||\"\";let bytes=asciiToBytes(text);bytes=padPkcs7(bytes);const blocks=toBlocks(bytes);summary.innerHTML=`<strong>Input length:</strong> ${text.length} chars &nbsp;&nbsp; <strong>Blocks:</strong> ${blocks.length} × 16 bytes`;tbody.innerHTML=\"\";let allHex=[];blocks.forEach((blk,i)=>{const ascii=toAsciiPrintable(blk);const hex=toHexLine(blk);allHex.push(hex);const tr=document.createElement('tr');const tdIdx=document.createElement('td');tdIdx.className='right mono';tdIdx.textContent=i;const tdAscii=document.createElement('td');tdAscii.className='mono wrap';tdAscii.textContent=ascii;const tdHex=document.createElement('td');tdHex.className='mono wrap';tdHex.innerHTML=`<code>${hex}</code>`;const tdAct=document.createElement('td');tdAct.className='right';const btn=document.createElement('button');btn.className='ghost';btn.textContent='Send';btn.title=`Send block ${i}`;btn.addEventListener('click',()=>sendBlock(i,hex));tdAct.appendChild(btn);tr.appendChild(tdIdx);tr.appendChild(tdAscii);tr.appendChild(tdHex);tr.appendChild(tdAct);tbody.appendChild(tr)});btnCopyAll.onclick=()=>copy(allHex.join(' '));btnSendAll.onclick=()=>{allHex.forEach((h,i)=>sendBlock(i,h));};out.style.display=blocks.length?\"block\":\"none\"}"
+"function sendBlock(i,hex){return fetch(`/send?i=${i}&hex=${encodeURIComponent(hex)}`,{method:'GET'})}"
+"function startTransmission(){fetch('/start',{method:'GET'});btnStartSPI.disabled=true;btnStartSPI.textContent='Transmitting...';}"
+"function convert(){const text=msgEl.value||\"\";let bytes=asciiToBytes(text);bytes=padPkcs7(bytes);const blocks=toBlocks(bytes);summary.innerHTML=`<strong>Input length:</strong> ${text.length} chars &nbsp;&nbsp; <strong>Blocks:</strong> ${blocks.length} × 16 bytes`;tbody.innerHTML=\"\";let allHex=[];blocks.forEach((blk,i)=>{const ascii=toAsciiPrintable(blk);const hex=toHexLine(blk);allHex.push(hex);const tr=document.createElement('tr');const tdIdx=document.createElement('td');tdIdx.className='right mono';tdIdx.textContent=i;const tdAscii=document.createElement('td');tdAscii.className='mono wrap';tdAscii.textContent=ascii;const tdHex=document.createElement('td');tdHex.className='mono wrap';tdHex.innerHTML=`<code>${hex}</code>`;tr.appendChild(tdIdx);tr.appendChild(tdAscii);tr.appendChild(tdHex);tbody.appendChild(tr)});btnCopyAll.onclick=()=>copy(allHex.join(' '));btnSendAll.onclick=async()=>{btnSendAll.disabled=true;btnSendAll.textContent='Loading...';for(let i=0;i<allHex.length;i++){await sendBlock(i,allHex[i]);}btnSendAll.textContent='Loaded to MCU';btnStartSPI.style.display='inline-block';};btnStartSPI.onclick=startTransmission;out.style.display=blocks.length?\"block\":\"none\"}"
 "msgEl.addEventListener('input',()=>{const n=msgEl.value.length;statsEl.textContent=`${n} char${n===1?'':'s'}`});"
-"btnConvert.addEventListener('click',convert);"
+"btnConvert.addEventListener('click',()=>{convert();btnSendAll.disabled=false;btnSendAll.textContent='Load to MCU';btnStartSPI.style.display='none';btnStartSPI.disabled=false;btnStartSPI.textContent='Start Transmission';});"
 "msgEl.value=\"\";statsEl.textContent=\"0 chars\";"
 "})();</script>"
 "</body></html>";
@@ -165,7 +172,7 @@ static void start_send_if_valid(int i) {
   if (i < 0 || i >= (int)total_blocks) return;
   if (!have_block[i]) return;
 
-  spi_send_pair_blocking(plaintext_blocks[i], keys[i]);
+  spi_send_pair_blocking((const uint8_t*)plaintext_blocks[i], (const uint8_t*)keys[i]);
   current_idx = i;
   next_idx = i + 1;
   tx_state = TX_WAIT_DONE;
@@ -231,6 +238,16 @@ void mechacrypt_maybe_start_after_block(int block_idx) {
 // ----------------- Request handler -----------------
 void processWebRequest(USART_TypeDef *USART)
 {
+  // If USART is NULL, something is very wrong - just return
+  if (USART == NULL) {
+    return;
+  }
+
+  // Only process if data is available
+  if (!(USART->ISR & USART_ISR_RXNE)) {
+    return;  // No data available, return immediately
+  }
+
   char request[BUFF_LEN] = {0};
   int idx = 0;
 
@@ -245,8 +262,12 @@ void processWebRequest(USART_TypeDef *USART)
     }
   }
 
+  debug_request_count++;  // Increment on every request
+
   // Handle: GET /send?i=##&hex=AA%20BB%20... HTTP/1.1
-  if (strstr(request, " /send?")) {
+  // Also handle ESP8266 format: /REQ:send?i=##&hex=...
+  // This ONLY stores the blocks, doesn't transmit via SPI yet
+  if (strstr(request, "/send?") || strstr(request, "send?")) {
     uint8_t blk[16] = {0};
     int got = 0;
     int block_idx = -1;
@@ -255,6 +276,7 @@ void processWebRequest(USART_TypeDef *USART)
     const char *pi = strstr(request, "i=");
     if (pi) {
       block_idx = atoi(pi+2);
+      debug_last_block_idx = block_idx;  // Debug tracking
     }
 
     const char *ph = strstr(request, "hex=");
@@ -263,7 +285,7 @@ void processWebRequest(USART_TypeDef *USART)
       char hexline[3*16+32] = {0};
       const char *src = ph+4; 
       char *dst = hexline;
-      while (*src && *src!=' ' && (dst-hexline) < (int)sizeof(hexline)-1) {
+      while (*src && *src!=' ' && *src!='\r' && *src!='\n' && (dst-hexline) < (int)sizeof(hexline)-1) {
         if (src[0]=='%' && src[1] && src[2]) {
           char a = src[1], b = src[2];
           int hv = (isdigit((unsigned char)a)?a-'0':(toupper((unsigned char)a)-'A'+10));
@@ -277,28 +299,48 @@ void processWebRequest(USART_TypeDef *USART)
       }
       *dst = 0;
       got = decode_hex_list(hexline, blk, 16);
+      debug_last_got_bytes = got;  // Debug tracking
     }
 
     if (got == 16 && block_idx >= 0 && block_idx < MAX_BLOCKS) {
       // Store plaintext block
-      memcpy(plaintext_blocks[block_idx], blk, 16);
+      memcpy((void*)plaintext_blocks[block_idx], blk, 16);
       
-      // TRNG-only: generate key; mark valid only on success
-      int trng_result = read_trng(keys[block_idx]);
+      // Generate TRNG key for this block
+      int trng_result = read_trng((uint8_t*)keys[block_idx]);
+      debug_last_trng_result = trng_result;  // Debug tracking
+      
       if (trng_result == 0) {
+        // Mark this block as valid and ready for SPI transmission
         have_block[block_idx] = 1;
         if (block_idx >= total_blocks) total_blocks = block_idx + 1;
-        led_blink_short();  // success: staged
-
-        // If this is the very first block, kick off SPI immediately
-        mechacrypt_maybe_start_after_block(block_idx);
+        led_blink_short();  // success: block staged in memory
+        
+        // NOTE: We do NOT start SPI transmission here anymore
+        // SPI transmission is triggered separately by the start command
       } else {
         have_block[block_idx] = 0;
         led_error_blink();  // TRNG failed
       }
+    } else {
+      // Debug: track why it failed
+      debug_last_got_bytes = got;
+      debug_last_block_idx = block_idx;
     }
 
     // Minimal response; keeps UI on current page
+    sendString(USART, (char*)http_header_no_content);
+    return;
+  }
+
+  // Handle: GET /start - Start SPI transmission of all stored blocks
+  if (strstr(request, "/start") || strstr(request, "start")) {
+    // Only start if we're idle and have at least one block
+    if (tx_state == TX_IDLE && total_blocks > 0 && have_block[0]) {
+      start_send_if_valid(0);  // Start with block 0
+      led_blink_short();  // Visual confirmation that SPI started
+    }
+    
     sendString(USART, (char*)http_header_no_content);
     return;
   }
