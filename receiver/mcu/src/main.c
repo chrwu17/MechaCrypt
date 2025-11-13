@@ -1,116 +1,108 @@
-#include "../lib/webpage.h"
-#include "../lib/STM32L432KC_USART.h"
-#include "../lib/STM32L432KC_GPIO.h"
+// Example receiver main.c showing how to integrate SPI receive with webpage
+
 #include "../lib/main.h"
-#include <string.h>
-#include <stdlib.h>
+#include "../lib/webpage.h"
+#include "../lib/STM32L432KC.h"
+#include "../lib/STM32L432KC_TIM.h"
+#include "../lib/STM32L432KC_USART.h"
+#include "../lib/STM32L432KC_SPI.h"
+#include "../lib/STM32L432KC_GPIO.h"
 
-// ----------------- Test Data Setup -----------------
-#define NUM_BLOCKS 3  // Simulating 3 blocks
+// Function prototype for storing received blocks (defined in webpage_receiver.c)
+void store_received_block(int block_idx, const uint8_t *block16);
 
-// Simulated blocks (16-byte each)
-uint8_t plaintext_blocks[NUM_BLOCKS][16] = {
-  {'H', 'e', 'l', 'l', 'o', ' ', 'F', 'P', 'G', 'A', ' ', 'B', 'l', 'o', 'c', 'k'},
-  {'T', 'e', 's', 't', ' ', 'B', 'l', 'o', 'c', 'k', ' ', 'T', 'w', 'o', ' ', 'D'},
-  {'M', 'C', 'U', ' ', 'R', 'e', 'c', 'e', 'i', 'v', 'e', 'r', ' ', 'T', 'h', 'r', 'e'}
-};
+// SPI receive state machine
+typedef enum {
+  RX_IDLE = 0,
+  RX_RECEIVING,
+  RX_DONE_SIGNAL
+} rx_state_t;
 
-// Block status (which blocks are received)
-uint8_t have_block[NUM_BLOCKS] = {1, 1, 1}; // All blocks are marked as received
-volatile uint16_t total_blocks = NUM_BLOCKS;
+static volatile rx_state_t rx_state = RX_IDLE;
+static volatile int current_rx_block = 0;
+static uint8_t rx_buffer[16];
 
-// ----------------- Small ACK blink -----------------
-static void led_blink_short(void) {
-  digitalWrite(LED_PIN, 1);
-  for (volatile int i = 0; i < 60000; ++i) __NOP();
-  digitalWrite(LED_PIN, 0);
+// Pins for FPGA handshake (adjust to your setup)
+#define READY_PIN  PA5   // MCU -> FPGA: Ready to receive
+#define VALID_PIN  PA6   // FPGA -> MCU: Data valid signal
+
+static inline int valid_is_high(void) {
+  return (digitalRead(VALID_PIN) != 0);
 }
 
-// ----------------- HTTP helpers -----------------
-static const char http_header_ok[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n";
-static const char http_header_json[] = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nConnection: close\r\n\r\n";
-static const char http_header_text[] = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n";
+void init_spi_receiver(void) {
+  // Configure handshake pins
+  pinMode(READY_PIN, GPIO_OUTPUT);
+  digitalWrite(READY_PIN, 1);  // Signal ready
+  pinMode(VALID_PIN, GPIO_INPUT);
+  
+  // Initialize SPI (adjust BR, CPOL, CPHA as needed)
+  initSPI(0b011, 0, 0);
+  digitalWrite(SPI_CE, 1);  // CS idle high
+  
+  rx_state = RX_IDLE;
+  current_rx_block = 0;
+}
 
-// ----------------- Request handler for test case -----------------
-void processWebRequest(USART_TypeDef *USART) {
-  char request[BUFF_LEN] = {0};
-  int idx = 0;
-
-  // Read request line (up to LF)
-  while (!(strchr(request, '\n'))) {
-    while (!(USART->ISR & USART_ISR_RXNE)) { /*spin*/ }
-    if (idx < (int)sizeof(request)-1) {
-      request[idx++] = readChar(USART);
-      request[idx] = '\0';
-    } else {
-      (void)readChar(USART); // discard extra
+// Poll for incoming SPI data from FPGA
+void poll_spi_receive(void) {
+  if (rx_state == RX_IDLE) {
+    // Check if FPGA signals data is valid
+    if (valid_is_high()) {
+      digitalWrite(READY_PIN, 0);  // Lower ready signal
+      rx_state = RX_RECEIVING;
+    }
+  } else if (rx_state == RX_RECEIVING) {
+    // Receive 16 bytes via SPI
+    digitalWrite(SPI_CE, 0);
+    for (int i = 0; i < 16; i++) {
+      rx_buffer[i] = (uint8_t)spiSendReceive(0x00);  // Clock in data
+    }
+    digitalWrite(SPI_CE, 1);
+    
+    // Store the received block
+    store_received_block(current_rx_block, rx_buffer);
+    current_rx_block++;
+    
+    rx_state = RX_DONE_SIGNAL;
+  } else if (rx_state == RX_DONE_SIGNAL) {
+    // Wait for FPGA to lower VALID signal
+    if (!valid_is_high()) {
+      digitalWrite(READY_PIN, 1);  // Signal ready for next block
+      rx_state = RX_IDLE;
     }
   }
+}
 
-  // --- Serve the Receiver Page (GET /rx) ---
-  if (strstr(request, "GET /rx ")) {
-    sendString(USART, http_header_ok);
-    sendString(USART, receiver_page);
-    return;
+int main(void) {
+  // Core initialization
+  configureFlash();
+  configureClock();
+  
+  gpioEnable(GPIO_PORT_A);
+  gpioEnable(GPIO_PORT_B);
+  gpioEnable(GPIO_PORT_C);
+  
+  pinMode(LED_PIN, GPIO_OUTPUT);
+  initTIM(TIM15);
+  
+  // Power-on blinks
+  for (int i = 0; i < 2; i++) {
+    digitalWrite(LED_PIN, 1);
+    delay_millis(TIM15, 200);
+    digitalWrite(LED_PIN, 0);
+    delay_millis(TIM15, 200);
   }
-
-  // --- Provide Block Status (GET /status) ---
-  if (strstr(request, "GET /status ")) {
-    sendString(USART, http_header_json);
-    sendString(USART, "{\"total\":");
-    char tmp[16];
-    sprintf(tmp, "%d", total_blocks);
-    sendString(USART, tmp);
-    sendString(USART, ",\"blocks\":{");
-
-    int first = 1;
-    for (uint16_t i = 0; i < total_blocks; i++) {
-      if (have_block[i]) {
-        if (!first) sendChar(USART, ',');
-        first = 0;
-        sendChar(USART, '\"'); sprintf(tmp, "%d", i); sendString(USART, tmp); sendChar(USART, '\"');
-        sendChar(USART, ':');
-        sendString(USART, "{\"hex\":\"");
-        for (int k = 0; k < 16; k++) {
-          if (k) sendChar(USART, ' ');
-          send_hex_byte(USART, plaintext_blocks[i][k]);
-        }
-        sendString(USART, "\",\"bytes\":[");
-        for (int k = 0; k < 16; k++) {
-          if (k) sendChar(USART, ',');
-          sprintf(tmp, "%d", plaintext_blocks[i][k]);
-          sendString(USART, tmp);
-        }
-        sendString(USART, "]}");
-      }
-    }
-    sendString(USART, "}}");
-    return;
-  }
-
-  // --- Combine All Blocks into Message (GET /combine) ---
-  if (strstr(request, "GET /combine ")) {
-    uint32_t cap = (uint32_t)total_blocks * 16u;
-    if (cap == 0u) { sendString(USART, http_header_text); sendString(USART, ""); return; }
-
-    for (uint16_t i = 0; i < total_blocks; i++) {
-      if (!have_block[i]) { sendString(USART, http_header_text); sendString(USART, ""); return; }
-    }
-
-    static uint8_t tmpbuf[NUM_BLOCKS * 16];
-    uint32_t pos = 0;
-    for (uint16_t i = 0; i < total_blocks; i++) {
-      memcpy(&tmpbuf[pos], plaintext_blocks[i], 16);
-      pos += 16;
-    }
-
-    int unpadded = pkcs7_unpad(tmpbuf, (int)pos);
-    if (unpadded <= 0) unpadded = (int)pos;
-
-    sendString(USART, http_header_text);
-    for (int i = 0; i < unpadded; i++) {
-      sendChar(USART, (char)tmpbuf[i]);
-    }
-    return;
+  
+  // Initialize USART for ESP8266
+  USART_TypeDef *USART = initUSART(USART1_ID, 125000);
+  
+  // Initialize SPI receiver and handshake
+  init_spi_receiver();
+  
+  // Main loop
+  while (1) {
+    processWebRequest(USART);   // Handle web requests
+    poll_spi_receive();         // Check for incoming SPI data
   }
 }
