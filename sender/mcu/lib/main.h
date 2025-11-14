@@ -8,7 +8,7 @@
 #include "STM32L432KC_TIM.h"
 
 // ===== Project-wide constants =====
-#define LED_PIN        PB3         // Adjust to your board's LED if different
+#define LED_PIN        PB8         // Adjust to your board's LED if different
 #define LOAD_PIN       PA5          // MCU -> FPGA (start/load)
 #define DONE_PIN       PA6          // FPGA -> MCU (done signal)
 
