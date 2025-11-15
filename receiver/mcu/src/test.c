@@ -17,7 +17,6 @@ volatile uint8_t received_blocks[MAX_BLOCKS][16];
 volatile uint8_t have_received[MAX_BLOCKS];
 volatile uint16_t total_received = 0;
 volatile uint16_t debug_request_count = 0;
-static int webpage_ready = 0;
 
 // ======================================================
 // LED Blink
@@ -308,54 +307,41 @@ void web_poll_spi(void) {
 // HTTP Request Handling
 // ======================================================
 void web_poll_uart(USART_TypeDef *USART) {
-    if (!webpage_ready)
-        return;
-
     if (!(USART->ISR & USART_ISR_RXNE))
         return;
 
     char request[BUFF_LEN] = {0};
     int idx = 0;
 
-    // Fully drain inbound GET request
-    while (USART->ISR & USART_ISR_RXNE) {
-        char c = USART->RDR;
-        if (idx < BUFF_LEN - 1)
-            request[idx++] = c;
-        if (c == '\n')
-            break;
+    while (!line_has_lf(request)) {
+        while (!(USART->ISR & USART_ISR_RXNE)) {}
+        if (idx < BUFF_LEN-1)
+            request[idx++] = readChar(USART);
     }
-    request[idx] = 0;
 
     debug_request_count++;
 
-    if (strstr(request, "GET /data")) {
+    if (strstr(request, "/data")) {
         send_json_data(USART);
-        goto drain;
+        return;
     }
 
-    if (strstr(request, "GET /clear")) {
+    if (strstr(request, "/clear")) {
         for (int i = 0; i < MAX_BLOCKS; i++) {
             have_received[i] = 0;
             memset((void*)received_blocks[i], 0, 16);
         }
         total_received = 0;
+
         sendString(USART, (char*)http_header_json);
         sendString(USART, "{\"status\":\"cleared\"}");
-        goto drain;
+        return;
     }
 
-    // Serve main page
+    // Default: serve HTML page
     sendString(USART, (char*)http_header_ok);
     sendString(USART, (char*)webpage);
-
-drain:
-    // VERY IMPORTANT: clear any remaining unread UART bytes
-    while (USART->ISR & USART_ISR_RXNE) {
-        volatile char drop = USART->RDR;
-    }
 }
-
 
 // ======================================================
 // WEB INIT — called once from main()
@@ -364,6 +350,6 @@ void web_init(void) {
     memset((void*)have_received, 0, sizeof(have_received));
     memset((void*)received_blocks, 0, sizeof(received_blocks));
     total_received = 0;
-    webpage_ready = 1;
+
     spi_init_receiver();
 }

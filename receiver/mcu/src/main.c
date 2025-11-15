@@ -1,108 +1,137 @@
-// Example receiver main.c showing how to integrate SPI receive with webpage
+// main.c — FULL DIAGNOSTIC VERSION
+// Finds exactly who overwrites PA9/PA10 (I2C pins)
 
+#include "stm32l4xx.h"
+#include "../lib/lcd_i2c.h"
+#include "../lib/i2c_bitbang.h"
 #include "../lib/main.h"
-#include "../lib/webpage.h"
 #include "../lib/STM32L432KC.h"
-#include "../lib/STM32L432KC_TIM.h"
-#include "../lib/STM32L432KC_USART.h"
-#include "../lib/STM32L432KC_SPI.h"
-#include "../lib/STM32L432KC_GPIO.h"
+#include "../lib/webpage.h"
 
-// Function prototype for storing received blocks (defined in webpage_receiver.c)
-void store_received_block(int block_idx, const uint8_t *block16);
+// ===========================================================
+// GLOBAL DEBUG WATCH VARIABLES (VISIBLE IN SEGGER)
+// ===========================================================
 
-// SPI receive state machine
-typedef enum {
-  RX_IDLE = 0,
-  RX_RECEIVING,
-  RX_DONE_SIGNAL
-} rx_state_t;
+// I2C ACK results
+volatile int lcd_ack_27 = -999;
+volatile int lcd_ack_3F = -999;
 
-static volatile rx_state_t rx_state = RX_IDLE;
-static volatile int current_rx_block = 0;
-static uint8_t rx_buffer[16];
+// GPIOA register snapshots
+volatile uint32_t dbg_MODER_A  = 0;
+volatile uint32_t dbg_OTYPER_A = 0;
+volatile uint32_t dbg_PUPDR_A  = 0;
 
-// Pins for FPGA handshake (adjust to your setup)
-#define READY_PIN  PA5   // MCU -> FPGA: Ready to receive
-#define VALID_PIN  PA6   // FPGA -> MCU: Data valid signal
+volatile uint32_t dbg_MODER_A2  = 0;
+volatile uint32_t dbg_OTYPER_A2 = 0;
+volatile uint32_t dbg_PUPDR_A2  = 0;
 
-static inline int valid_is_high(void) {
-  return (digitalRead(VALID_PIN) != 0);
+volatile uint32_t dbg_MODER_A3  = 0;
+volatile uint32_t dbg_OTYPER_A3 = 0;
+volatile uint32_t dbg_PUPDR_A3  = 0;
+
+volatile uint32_t dbg_MODER_A4  = 0;
+volatile uint32_t dbg_OTYPER_A4 = 0;
+volatile uint32_t dbg_PUPDR_A4  = 0;
+
+// ===========================================================
+// Microsecond Delay (SysTick)
+// ===========================================================
+void delay_us(uint32_t us)
+{
+    if (us == 0) return;
+
+    uint32_t ticks = (SystemCoreClock / 1000000) * us;
+    if (ticks > 0xFFFFFF) ticks = 0xFFFFFF;
+
+    SysTick->LOAD = ticks;
+    SysTick->VAL  = 0;
+    SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_ENABLE_Msk;
+
+    while (!(SysTick->CTRL & SysTick_CTRL_COUNTFLAG_Msk));
+    SysTick->CTRL = 0;
 }
 
-void init_spi_receiver(void) {
-  // Configure handshake pins
-  pinMode(READY_PIN, GPIO_OUTPUT);
-  digitalWrite(READY_PIN, 1);  // Signal ready
-  pinMode(VALID_PIN, GPIO_INPUT);
-  
-  // Initialize SPI (adjust BR, CPOL, CPHA as needed)
-  initSPI(0b011, 0, 0);
-  digitalWrite(SPI_CE, 1);  // CS idle high
-  
-  rx_state = RX_IDLE;
-  current_rx_block = 0;
+// ===========================================================
+// Clock Init — HSI16
+// ===========================================================
+static void Clock_Init_HSI16(void)
+{
+    RCC->CR |= RCC_CR_HSION;
+    while (!(RCC->CR & RCC_CR_HSIRDY));
+
+    RCC->CFGR &= ~RCC_CFGR_SW;
+    RCC->CFGR |=  RCC_CFGR_SW_HSI;
+
+    while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_HSI);
+
+    SystemCoreClockUpdate();
 }
 
-// Poll for incoming SPI data from FPGA
-void poll_spi_receive(void) {
-  if (rx_state == RX_IDLE) {
-    // Check if FPGA signals data is valid
-    if (valid_is_high()) {
-      digitalWrite(READY_PIN, 0);  // Lower ready signal
-      rx_state = RX_RECEIVING;
-    }
-  } else if (rx_state == RX_RECEIVING) {
-    // Receive 16 bytes via SPI
-    digitalWrite(SPI_CE, 0);
-    for (int i = 0; i < 16; i++) {
-      rx_buffer[i] = (uint8_t)spiSendReceive(0x00);  // Clock in data
-    }
-    digitalWrite(SPI_CE, 1);
-    
-    // Store the received block
-    store_received_block(current_rx_block, rx_buffer);
-    current_rx_block++;
-    
-    rx_state = RX_DONE_SIGNAL;
-  } else if (rx_state == RX_DONE_SIGNAL) {
-    // Wait for FPGA to lower VALID signal
-    if (!valid_is_high()) {
-      digitalWrite(READY_PIN, 1);  // Signal ready for next block
-      rx_state = RX_IDLE;
-    }
-  }
-}
-
+// ===========================================================
+// MAIN
+// ===========================================================
 int main(void) {
-  // Core initialization
-  configureFlash();
-  configureClock();
-  
-  gpioEnable(GPIO_PORT_A);
-  gpioEnable(GPIO_PORT_B);
-  gpioEnable(GPIO_PORT_C);
-  
-  pinMode(LED_PIN, GPIO_OUTPUT);
-  initTIM(TIM15);
-  
-  // Power-on blinks
-  for (int i = 0; i < 2; i++) {
-    digitalWrite(LED_PIN, 1);
-    delay_millis(TIM15, 200);
-    digitalWrite(LED_PIN, 0);
-    delay_millis(TIM15, 200);
-  }
-  
-  // Initialize USART for ESP8266
-  USART_TypeDef *USART = initUSART(USART1_ID, 125000);
-  
-  // Initialize SPI receiver and handshake
-  init_spi_receiver();
-  
-  // Main loop
-  while (1) {
-    processWebRequest(USART);   // Handle web requests
-    poll_spi_receive();         // Check for incoming SPI data
-  }
+
+    // STEP 0 — System init
+    configureFlash();
+    configureClock();
+    Clock_Init_HSI16();
+    SystemCoreClockUpdate();
+
+    // STEP 1 — Enable GPIOA
+    gpioEnable(GPIO_PORT_A);
+
+    // STEP 2 — Configure PA9/PA10 FOR BITBANG I2C
+    GPIOA->MODER &= ~((3u<<(9*2)) | (3u<<(10*2)));  // clear mode
+    GPIOA->MODER |=  ((1u<<(9*2)) | (1u<<(10*2)));  // output mode
+    GPIOA->OTYPER |= (1u<<9) | (1u<<10);            // open-drain
+    GPIOA->PUPDR &= ~((3u<<(9*2)) | (3u<<(10*2)));  // clear PU/PD
+    GPIOA->PUPDR |=  ((1u<<(9*2)) | (1u<<(10*2)));  // pull-up
+    GPIOA->ODR   |=  (1u<<9) | (1u<<10);            // idle high
+
+    // SNAPSHOT #1 — AFTER I2C CONFIG
+    dbg_MODER_A  = GPIOA->MODER;
+    dbg_OTYPER_A = GPIOA->OTYPER;
+    dbg_PUPDR_A  = GPIOA->PUPDR;
+
+    // STEP 3 — RAW I2C ADDRESS PROBE (BEFORE LCD INIT)
+    lcd_ack_27 = i2c_bitbang_write(0x27, 0x00);
+    lcd_ack_3F = i2c_bitbang_write(0x3F, 0x00);
+
+    // SNAPSHOT #2 — AFTER PROBING
+    dbg_MODER_A2  = GPIOA->MODER;
+    dbg_OTYPER_A2 = GPIOA->OTYPER;
+    dbg_PUPDR_A2  = GPIOA->PUPDR;
+
+    // STEP 4 — LCD INIT
+    lcd_i2c_t lcd;
+    lcd_init(&lcd, 0x27, 20, 4, i2c_bitbang_write, delay_us);
+    lcd_begin(&lcd);
+    lcd_backlight(&lcd);
+    lcd_set_cursor(&lcd, 0, 0);
+    lcd_print(&lcd, "LCD DEBUG TEST 1");
+
+    // SNAPSHOT #3 — AFTER LCD INIT
+    dbg_MODER_A3  = GPIOA->MODER;
+    dbg_OTYPER_A3 = GPIOA->OTYPER;
+    dbg_PUPDR_A3  = GPIOA->PUPDR;
+
+    // STEP 5 — NOW init the rest (SPI, USART, webpage)
+    gpioEnable(GPIO_PORT_B);
+    gpioEnable(GPIO_PORT_C);
+    initTIM(TIM15);
+
+    USART_TypeDef *USART = initUSART(USART1_ID, 125000);
+    web_init();
+
+    // SNAPSHOT #4 — AFTER ALL INITIALIZATION
+    dbg_MODER_A4  = GPIOA->MODER;
+    dbg_OTYPER_A4 = GPIOA->OTYPER;
+    dbg_PUPDR_A4  = GPIOA->PUPDR;
+
+    // LOOP (keep system active)
+    while (1) {
+        web_poll_uart(USART);
+        web_poll_spi();
+    }
 }
