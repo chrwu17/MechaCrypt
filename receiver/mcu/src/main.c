@@ -101,19 +101,20 @@ int main(void)
     // Now reclaim PA9/PA10 for bit-banged I2C to the LCD
     lcd_hw_init();
 
+        // SPI init: slow baud, mode 0 (CPOL=0, CPHA=0)
+    initSPI(0b111, 0, 0);   // slowest SPI clk for safety (you can speed up later)
+
+    // Chip select pin for FPGA
+    pinMode(SPI_CE, GPIO_OUTPUT);
+    digitalWrite(SPI_CE, 1);  // idle high (not selected)
+
+
     // Main loop:
     //  - service HTTP
     //  - (your SPI receiver logic will call receiver_store_block())
     while (1) {
         processWebRequest(USART);
 
-        // TODO: if you want, you can update the LCD here:
-        //  - e.g., show total_received or first N chars of plaintext.
-        //
-        // Example (pseudo-code):
-        // lcd_set_cursor(&lcd, 0, 1);
-        // char buf[21];
-        // snprintf(buf, sizeof(buf), "Blocks: %u", total_received);
-        // lcd_print(&lcd, buf);
+        receiver_spi_demo_poll();
     }
 }

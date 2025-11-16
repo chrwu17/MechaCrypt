@@ -307,3 +307,38 @@ void processWebRequest(USART_TypeDef *USART)
     sendString(USART, (char*)http_header_ok);
     sendString(USART, (char*)webpage);
 }
+
+// ----------------- SPI demo: fetch one block from FPGA -----------------
+
+static void spi_demo_fetch_block(void)
+{
+    if (total_received >= MAX_BLOCKS) {
+        return;
+    }
+
+    uint8_t buf[16];
+
+    // Select FPGA (CS low)
+    digitalWrite(SPI_CE, 0);
+
+    // 16 bytes = 128 bits
+    for (int i = 0; i < 16; i++) {
+        buf[i] = (uint8_t) spiSendReceive(0x00);  // send dummy, read data
+    }
+
+    // De-select FPGA (CS high)
+    digitalWrite(SPI_CE, 1);
+
+    // Store into shared state so /data + UI see it
+    receiver_store_block(total_received, buf);
+}
+
+// Public function called from main loop
+void receiver_spi_demo_poll(void)
+{
+    // For a simple demo: just grab 4 blocks, then stop
+    if (total_received < 4) {
+        spi_demo_fetch_block();
+    }
+}
+
