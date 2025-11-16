@@ -2,44 +2,51 @@
 #include "../lib/STM32L432KC_USART.h"
 #include "../lib/STM32L432KC_GPIO.h"
 #include "../lib/STM32L432KC_TIM.h"
-#include "../lib/STM32L432KC_SPI.h"
 #include "../lib/STM32L432KC.h"
 #include "../lib/main.h"
+
 #include <string.h>
-#include <ctype.h>
 #include <stdlib.h>
 #include <stdio.h>
 
 // ======================================================
-// Shared State Storage
+// Shared State (Receiver)
 // ======================================================
+
 volatile uint8_t received_blocks[MAX_BLOCKS][16];
 volatile uint8_t have_received[MAX_BLOCKS];
-volatile uint16_t total_received = 0;
+volatile uint16_t total_received      = 0;
 volatile uint16_t debug_request_count = 0;
-static int webpage_ready = 0;
 
-// ======================================================
-// LED Blink
-// ======================================================
+// (optional) you can hook this to LED for quick visual debug
 static void led_blink_short(void) {
     digitalWrite(LED_PIN, 1);
-    delay_millis(TIM15, 150);
+    delay_millis(TIM15, 100);
     digitalWrite(LED_PIN, 0);
 }
 
 // ======================================================
 // HTTP Headers
 // ======================================================
+
 static const char http_header_ok[] =
-"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n";
+"HTTP/1.1 200 OK\r\n"
+"Content-Type: text/html; charset=utf-8\r\n"
+"Connection: close\r\n\r\n";
 
 static const char http_header_json[] =
-"HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nConnection: close\r\n\r\n";
+"HTTP/1.1 200 OK\r\n"
+"Content-Type: application/json; charset=utf-8\r\n"
+"Connection: close\r\n\r\n";
+
+static const char http_header_no_content[] =
+"HTTP/1.1 204 No Content\r\n"
+"Connection: close\r\n\r\n";
 
 // ======================================================
-// FULL HTML PAGE   (UNCHANGED FROM YOUR ORIGINAL FILE)
+// Static HTML + JS (Receiver UI)
 // ======================================================
+
 const char webpage[] =
 "<!DOCTYPE html><html lang=\"en\"><head>"
 "<meta charset=\"utf-8\"/>"
@@ -193,177 +200,110 @@ const char webpage[] =
 "</body></html>";
 
 // ======================================================
-// JSON Output
+// Small Helpers
 // ======================================================
-static void send_json_data(USART_TypeDef *USART) {
-    sendString(USART, (char*)http_header_json);
-    sendString(USART, "{\"total_received\":");
 
-    char buf[16];
-    sprintf(buf, "%d", total_received);
-    sendString(USART, buf);
-
-    sendString(USART, ",\"blocks\":[");
-
-    for (int i = 0; i < total_received; i++) {
-        if (!have_received[i]) continue;
-
-        if (i > 0) sendString(USART, ",");
-        sendString(USART, "[");
-
-        for (int j = 0; j < 16; j++) {
-            if (j > 0) sendString(USART, ",");
-            sprintf(buf, "%d", received_blocks[i][j]);
-            sendString(USART, buf);
-        }
-        sendString(USART, "]");
-    }
-
-    sendString(USART, "]}");
-}
-
-// ======================================================
-// HTTP Request Helpers
-// ======================================================
 static inline int line_has_lf(const char *buf) {
     return strchr(buf, '\n') != NULL;
 }
 
+// Stream JSON out over USART so we don't need a giant buffer.
+static void send_json_status(USART_TypeDef *USART) {
+    char numbuf[16];
+
+    sendString(USART, (char*)http_header_json);
+    sendString(USART, "{ \"total_received\": ");
+
+    snprintf(numbuf, sizeof(numbuf), "%u", (unsigned)total_received);
+    sendString(USART, numbuf);
+    sendString(USART, ", \"blocks\":[");
+
+    // Assume blocks 0..total_received-1 are contiguous and valid
+    for (uint16_t i = 0; i < total_received; i++) {
+        sendChar(USART, '[');
+        for (int j = 0; j < 16; j++) {
+            snprintf(numbuf, sizeof(numbuf), "%u", (unsigned)received_blocks[i][j]);
+            sendString(USART, numbuf);
+            if (j < 15) {
+                sendChar(USART, ',');
+            }
+        }
+        sendChar(USART, ']');
+        if (i + 1 < total_received) {
+            sendChar(USART, ',');
+        }
+    }
+
+    sendString(USART, "] }\r\n");
+}
+
 // ======================================================
-// PUBLIC: Store a 16-byte block
+// Public helper: store a received block
 // ======================================================
-void store_received_block(int block_idx, const uint8_t *block16) {
-    if (block_idx < 0 || block_idx >= MAX_BLOCKS) return;
-    if (!block16) return;
 
-    memcpy((void*)received_blocks[block_idx], block16, 16);
-    have_received[block_idx] = 1;
+void receiver_store_block(uint16_t idx, const uint8_t blk[16]) {
+    if (idx >= MAX_BLOCKS) return;
 
-    if (block_idx >= total_received)
-        total_received = block_idx + 1;
+    memcpy((void*)received_blocks[idx], blk, 16);
+    have_received[idx] = 1;
 
+    if (idx + 1 > total_received) {
+        total_received = idx + 1;
+    }
+
+    // Optional visual feedback
     led_blink_short();
 }
 
 // ======================================================
-// SPI RECEIVE LOGIC (MERGED FROM RECEIVER main.c)
+// Request handler
 // ======================================================
-typedef enum {
-    RX_IDLE = 0,
-    RX_RECEIVING,
-    RX_DONE_SIGNAL
-} rx_state_t;
 
-static volatile rx_state_t rx_state = RX_IDLE;
-static volatile int current_rx_block = 0;
-static uint8_t rx_buffer[16];
-
-#define READY_PIN  PA5
-#define VALID_PIN  PA6
-
-static inline int valid_is_high(void) {
-    return digitalRead(VALID_PIN) != 0;
-}
-
-static void spi_init_receiver(void) {
-    pinMode(READY_PIN, GPIO_OUTPUT);
-    digitalWrite(READY_PIN, 1);
-
-    pinMode(VALID_PIN, GPIO_INPUT);
-
-    initSPI(0b011, 0, 0);
-    digitalWrite(SPI_CE, 1);
-
-    rx_state = RX_IDLE;
-    current_rx_block = 0;
-}
-
-void web_poll_spi(void) {
-    if (rx_state == RX_IDLE) {
-        if (valid_is_high()) {
-            digitalWrite(READY_PIN, 0);
-            rx_state = RX_RECEIVING;
-        }
-    }
-    else if (rx_state == RX_RECEIVING) {
-        digitalWrite(SPI_CE, 0);
-        for (int i = 0; i < 16; i++)
-            rx_buffer[i] = (uint8_t)spiSendReceive(0x00);
-        digitalWrite(SPI_CE, 1);
-
-        store_received_block(current_rx_block, rx_buffer);
-        current_rx_block++;
-
-        rx_state = RX_DONE_SIGNAL;
-    }
-    else if (rx_state == RX_DONE_SIGNAL) {
-        if (!valid_is_high()) {
-            digitalWrite(READY_PIN, 1);
-            rx_state = RX_IDLE;
-        }
-    }
-}
-
-// ======================================================
-// HTTP Request Handling
-// ======================================================
-void web_poll_uart(USART_TypeDef *USART) {
-    if (!webpage_ready)
+void processWebRequest(USART_TypeDef *USART)
+{
+    if (USART == NULL) {
         return;
+    }
 
-    if (!(USART->ISR & USART_ISR_RXNE))
+    // Only act if something is waiting
+    if (!(USART->ISR & USART_ISR_RXNE)) {
         return;
+    }
 
     char request[BUFF_LEN] = {0};
     int idx = 0;
 
-    // Fully drain inbound GET request
-    while (USART->ISR & USART_ISR_RXNE) {
-        char c = USART->RDR;
-        if (idx < BUFF_LEN - 1)
-            request[idx++] = c;
-        if (c == '\n')
-            break;
+    // Read request line up to LF
+    while (!line_has_lf(request)) {
+        while (!(USART->ISR & USART_ISR_RXNE)) { /* spin */ }
+        if (idx < (int)sizeof(request) - 1) {
+            request[idx++] = readChar(USART);
+            request[idx]   = '\0';
+        } else {
+            (void)readChar(USART);  // discard extras
+        }
     }
-    request[idx] = 0;
 
     debug_request_count++;
 
-    if (strstr(request, "GET /data")) {
-        send_json_data(USART);
-        goto drain;
+    // Handle: GET /data
+    if (strstr(request, "/data") || strstr(request, "data")) {
+        send_json_status(USART);
+        return;
     }
 
-    if (strstr(request, "GET /clear")) {
+    // Handle: GET /clear
+    if (strstr(request, "/clear") || strstr(request, "clear")) {
         for (int i = 0; i < MAX_BLOCKS; i++) {
-            have_received[i] = 0;
             memset((void*)received_blocks[i], 0, 16);
+            have_received[i] = 0;
         }
         total_received = 0;
-        sendString(USART, (char*)http_header_json);
-        sendString(USART, "{\"status\":\"cleared\"}");
-        goto drain;
+        sendString(USART, (char*)http_header_no_content);
+        return;
     }
 
-    // Serve main page
+    // Default: serve the full receiver UI page
     sendString(USART, (char*)http_header_ok);
     sendString(USART, (char*)webpage);
-
-drain:
-    // VERY IMPORTANT: clear any remaining unread UART bytes
-    while (USART->ISR & USART_ISR_RXNE) {
-        volatile char drop = USART->RDR;
-    }
-}
-
-
-// ======================================================
-// WEB INIT — called once from main()
-// ======================================================
-void web_init(void) {
-    memset((void*)have_received, 0, sizeof(have_received));
-    memset((void*)received_blocks, 0, sizeof(received_blocks));
-    total_received = 0;
-    webpage_ready = 1;
-    spi_init_receiver();
 }

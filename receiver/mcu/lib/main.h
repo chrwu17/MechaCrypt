@@ -12,6 +12,9 @@
 #define READY_PIN PA5
 #define VALID_PIN PA6
 
+#define MAX_BLOCKS     64           // number of blocks UI can stage
+#define BUFF_LEN       512          // HTTP request line buffer
+
 // System bring-up
 void configureFlash(void);
 void configureClock(void);
