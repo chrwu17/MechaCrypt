@@ -1,5 +1,5 @@
 <!DOCTYPE CrossStudio_Project_File>
-<solution Name="mechaCryptReceiver" version="2" target="8">
+<solution Name="mechaCryptReceiver" target="8" version="2">
   <configuration
     Name="Debug"
     c_preprocessor_definitions="DEBUG"
@@ -60,13 +60,12 @@
     <folder Name="Source Files">
       <configuration Name="Common" filter="c;cpp;cxx;cc;h;s;asm;inc" />
       <folder Name="lib">
-        <file file_name="../lib/i2c_bitbang.h" />
         <file file_name="../lib/lcd_i2c.h" />
         <file file_name="../lib/main.h" />
         <file file_name="../lib/STM32L432KC.h" />
         <file file_name="../lib/STM32L432KC_FLASH.h" />
         <file file_name="../lib/STM32L432KC_GPIO.h" />
-        <file file_name="../lib/STM32L432KC_I2C_bb.h" />
+        <file file_name="../lib/STM32L432KC_I2C.h" />
         <file file_name="../lib/STM32L432KC_RCC.h" />
         <file file_name="../lib/STM32L432KC_SPI.h" />
         <file file_name="../lib/STM32L432KC_TIM.h" />
@@ -74,12 +73,11 @@
         <file file_name="../lib/webpage.h" />
       </folder>
       <folder Name="src">
-        <file file_name="../src/i2c_bitbang.c" />
         <file file_name="../src/lcd_i2c.c" />
         <file file_name="../src/main.c" />
         <file file_name="../src/STM32L432KC_FLASH.c" />
         <file file_name="../src/STM32L432KC_GPIO.c" />
-        <file file_name="../src/STM32L432KC_I2C_bb.c" />
+        <file file_name="../src/STM32L432KC_I2C.c" />
         <file file_name="../src/STM32L432KC_RCC.c" />
         <file file_name="../src/STM32L432KC_SPI.c" />
         <file file_name="../src/STM32L432KC_TIM.c" />

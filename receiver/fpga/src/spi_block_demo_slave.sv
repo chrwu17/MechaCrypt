@@ -12,7 +12,7 @@ module spi_block_demo_slave (
 
     // 128-bit shift register for outgoing/incoming data
     logic [127:0] shift_reg;
-    logic [7:0]   bit_cnt;    // counts bits in current transfer (0..128)
+    logic [7:0]   bit_cnt;    // counts bits in current transfer (0..127)
     logic [1:0]   block_idx;  // which demo block we are on (0..3)
 
     // Demo blocks (16 bytes each) – tweak these however you like.
@@ -38,40 +38,45 @@ module spi_block_demo_slave (
     // Choose which block to load based on block_idx
     always_comb begin
         unique case (block_idx)
-            2'd0:   cur_block = BLOCK0;
-            2'd1:   cur_block = BLOCK1;
-            2'd2:   cur_block = BLOCK2;
+            2'd0:    cur_block = BLOCK0;
+            2'd1:    cur_block = BLOCK1;
+            2'd2:    cur_block = BLOCK2;
             default: cur_block = BLOCK3;
         endcase
     end
 
-    // Load a new block whenever CS goes low (start of a transfer)
-    always_ff @(negedge spi_cs_n or negedge reset_n) begin
+    // Single clocked process:
+    //  - Clock domain = SPI SCK (master provides it)
+    //  - Async reset on reset_n
+    //  - CS handled inside via spi_cs_n
+    always_ff @(posedge spi_sck or negedge reset_n) begin
         if (!reset_n) begin
+            bit_cnt   <= 8'd0;
+            block_idx <= 2'd0;
             shift_reg <= BLOCK0;
-            bit_cnt   <= 8'd0;
-            block_idx <= 2'd0;
         end else begin
-            shift_reg <= cur_block;  // load the current 128-bit block
-            bit_cnt   <= 8'd0;
-        end
-    end
+            if (spi_cs_n) begin
+                // Not selected: idle. Reset counter so next transfer
+                // starts fresh on next active CS.
+                bit_cnt <= 8'd0;
+            end else begin
+                // Selected: active transfer
+                if (bit_cnt == 8'd0) begin
+                    // On first bit of a new transfer, load the current block
+                    shift_reg <= cur_block;
+                end else begin
+                    // Shift out MSB, shift in new bit on LSB
+                    shift_reg <= {shift_reg[126:0], spi_mosi};
+                end
 
-    // Shift on rising edge of SCK while CS is low.
-    // When CS goes high again and we saw 128 bits, advance block.
-    always_ff @(posedge spi_sck or posedge spi_cs_n or negedge reset_n) begin
-        if (!reset_n) begin
-            bit_cnt   <= 8'd0;
-            block_idx <= 2'd0;
-        end else if (spi_cs_n) begin
-            // End of transfer. If we shifted exactly 128 bits, go to next block.
-            if (bit_cnt == 8'd128) begin
-                block_idx <= block_idx + 2'd1;  // wraps 0→1→2→3→0
+                // Count bits 0..127
+                if (bit_cnt == 8'd127) begin
+                    bit_cnt   <= 8'd0;           // wrap for next transfer
+                    block_idx <= block_idx + 2'd1;  // next demo block
+                end else begin
+                    bit_cnt <= bit_cnt + 8'd1;
+                end
             end
-        end else begin
-            // While CS is low: shift out MSB on MISO, shift in MOSI on LSB.
-            shift_reg <= { shift_reg[126:0], spi_mosi };
-            bit_cnt   <= bit_cnt + 8'd1;
         end
     end
 

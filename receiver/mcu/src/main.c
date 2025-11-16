@@ -14,10 +14,9 @@
 #include "../lib/STM32L432KC_TIM.h"
 #include "../lib/STM32L432KC_USART.h"
 #include "../lib/STM32L432KC_GPIO.h"
-
+#include "../lib/STM32L432KC_I2C.h" 
 // Adjust these includes to match your actual LCD/I2C header names:
 #include "../lib/lcd_i2c.h"
-#include "../lib/i2c_bitbang.h"
 
 // ----------------- Local LCD handle -----------------
 static lcd_i2c_t lcd;
@@ -39,23 +38,15 @@ void delay_us(uint32_t us)
     SysTick->CTRL = 0;
 }
 
-// ----------------- LCD + bit-banged I2C init on PA9/PA10 -----------------
+
+
 static void lcd_hw_init(void)
 {
-    // Make sure GPIOA clock is on
-    gpioEnable(GPIO_PORT_A);
-
-    // Configure PA9/PA10 as open-drain outputs with pull-ups, idle high.
-    // This matches i2c_bitbang.c (SCL=9, SDA=10) and keeps them out of USART AF.
-    GPIOA->MODER &= ~((3u << (9*2)) | (3u << (10*2)));  // clear mode
-    GPIOA->MODER |=  ((1u << (9*2)) | (1u << (10*2)));  // output mode
-    GPIOA->OTYPER |= (1u << 9) | (1u << 10);            // open-drain
-    GPIOA->PUPDR &= ~((3u << (9*2)) | (3u << (10*2)));  // clear PU/PD
-    GPIOA->PUPDR |=  ((1u << (9*2)) | (1u << (10*2)));  // pull-up
-    GPIOA->ODR   |=  (1u << 9) | (1u << 10);            // idle high
-
-    // Basic LCD init sequence using 0x27 backpack
-    lcd_init(&lcd, 0x27, 20, 4, i2c_bitbang_write, delay_us);
+    // Initialize hardware I2C1
+    initI2C1();
+    
+    // Initialize LCD using hardware I2C write function
+    lcd_init(&lcd, 0x27, 20, 4, i2c_write_byte, delay_us);
     lcd_begin(&lcd);
     lcd_backlight(&lcd);
     lcd_clear(&lcd);
