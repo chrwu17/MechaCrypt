@@ -44,5 +44,7 @@ void receiver_store_block(uint16_t idx, const uint8_t blk[16]);
 // Poll the SPI demo source on FPGA and store new blocks (if any)
 void receiver_spi_demo_poll(void);
 
+void receiver_demo_init_plaintext(void);   // from webpage.c
+
 
 #endif // WEBPAGE_H

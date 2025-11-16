@@ -14,9 +14,11 @@
 // ======================================================
 
 volatile uint8_t received_blocks[MAX_BLOCKS][16];
+volatile uint8_t plaintext_blocks[MAX_BLOCKS][16];  // NEW: plaintext storage
 volatile uint8_t have_received[MAX_BLOCKS];
 volatile uint16_t total_received      = 0;
 volatile uint16_t debug_request_count = 0;
+
 
 // (optional) you can hook this to LED for quick visual debug
 static void led_blink_short(void) {
@@ -136,10 +138,16 @@ const char webpage[] =
 "async function fetchData(){"
 "  try{"
 "    const resp=await fetch('/data');"
-"    const data=await resp.json();"
+"    const raw=await resp.text();"
+"    console.log('RAW /data response:',raw);"
+"    const data=JSON.parse(raw);"
 "    updateUI(data);"
-"  }catch(e){console.error('Fetch error:',e);}"
+"  }catch(e){"
+"    console.error('Fetch/JSON error:',e);"
+"    status.textContent='Error fetching /data (see console)';"
+"  }"
 "}"
+
 
 "function updateUI(data){"
 "  const count=data.total_received||0;"
@@ -211,18 +219,23 @@ static inline int line_has_lf(const char *buf) {
 static void send_json_status(USART_TypeDef *USART) {
     char numbuf[16];
 
-    sendString(USART, (char*)http_header_json);
+    // REMOVE this line:
+    // sendString(USART, (char*)http_header_json);
+
+    // JSON body only:
     sendString(USART, "{ \"total_received\": ");
 
     snprintf(numbuf, sizeof(numbuf), "%u", (unsigned)total_received);
     sendString(USART, numbuf);
     sendString(USART, ", \"blocks\":[");
 
-    // Assume blocks 0..total_received-1 are contiguous and valid
+    // Use whatever buffer you want exposed to the UI.
+    // If you have plaintext_blocks, use that; otherwise received_blocks is fine.
     for (uint16_t i = 0; i < total_received; i++) {
         sendChar(USART, '[');
         for (int j = 0; j < 16; j++) {
-            snprintf(numbuf, sizeof(numbuf), "%u", (unsigned)received_blocks[i][j]);
+            snprintf(numbuf, sizeof(numbuf), "%u",
+                     (unsigned)plaintext_blocks[i][j]); // or received_blocks[i][j]
             sendString(USART, numbuf);
             if (j < 15) {
                 sendChar(USART, ',');
@@ -237,6 +250,61 @@ static void send_json_status(USART_TypeDef *USART) {
     sendString(USART, "] }\r\n");
 }
 
+
+
+// ======================================================
+// Demo helper: seed plaintext_blocks with sample ASCII
+// ======================================================
+
+void receiver_demo_init_plaintext(void)
+{
+    const char *msg =
+        "MECHACRYPT DEMO\n"
+        "Hello from the MCU receiver.\n"
+        "These bytes are shown as HEX and ASCII.\n";
+
+    size_t len = strlen(msg);
+
+    // Simple PKCS#7-like padding so the JS unpadding logic is happy
+    uint8_t pad = (uint8_t)(16 - (len % 16));
+    if (pad == 0) pad = 16;
+
+    size_t total_bytes = len + pad;
+    size_t blocks = total_bytes / 16;
+    if (blocks > MAX_BLOCKS) {
+        blocks = MAX_BLOCKS;
+        total_bytes = blocks * 16;
+        if (len > total_bytes) {
+            len = total_bytes;  // hard cut if somehow longer
+        }
+    }
+
+    // Clear existing state
+    memset((void*)received_blocks,  0, sizeof(received_blocks));
+    memset((void*)plaintext_blocks, 0, sizeof(plaintext_blocks));
+    memset((void*)have_received,    0, sizeof(have_received));
+
+    // Fill blocks with the ASCII message + padding
+    for (size_t i = 0; i < blocks; i++) {
+        for (size_t j = 0; j < 16; j++) {
+            size_t idx = i * 16 + j;
+            uint8_t b;
+            if (idx < len) {
+                b = (uint8_t)msg[idx];
+            } else {
+                b = pad;
+            }
+            received_blocks[i][j]  = b;  // raw data
+            plaintext_blocks[i][j] = b;  // what the UI will show
+        }
+        have_received[i] = 1;
+    }
+
+    total_received = (uint16_t)blocks;
+}
+
+
+
 // ======================================================
 // Public helper: store a received block
 // ======================================================
@@ -244,7 +312,12 @@ static void send_json_status(USART_TypeDef *USART) {
 void receiver_store_block(uint16_t idx, const uint8_t blk[16]) {
     if (idx >= MAX_BLOCKS) return;
 
+    // Raw data from FPGA (ciphertext or whatever you like)
     memcpy((void*)received_blocks[idx], blk, 16);
+
+    // For now, treat it as “plaintext” too (later you can copy decrypted data here)
+    memcpy((void*)plaintext_blocks[idx], blk, 16);
+
     have_received[idx] = 1;
 
     if (idx + 1 > total_received) {
@@ -254,6 +327,7 @@ void receiver_store_block(uint16_t idx, const uint8_t blk[16]) {
     // Optional visual feedback
     led_blink_short();
 }
+
 
 // ======================================================
 // Request handler
@@ -295,13 +369,15 @@ void processWebRequest(USART_TypeDef *USART)
     // Handle: GET /clear
     if (strstr(request, "/clear") || strstr(request, "clear")) {
         for (int i = 0; i < MAX_BLOCKS; i++) {
-            memset((void*)received_blocks[i], 0, 16);
+            memset((void*)received_blocks[i],  0, 16);
+            memset((void*)plaintext_blocks[i], 0, 16);  // NEW
             have_received[i] = 0;
         }
         total_received = 0;
         sendString(USART, (char*)http_header_no_content);
         return;
     }
+
 
     // Default: serve the full receiver UI page
     sendString(USART, (char*)http_header_ok);

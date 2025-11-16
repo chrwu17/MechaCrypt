@@ -92,6 +92,8 @@ int main(void)
     // Now reclaim PA9/PA10 for bit-banged I2C to the LCD
     lcd_hw_init();
 
+    receiver_demo_init_plaintext();  // optional demo init
+
         // SPI init: slow baud, mode 0 (CPOL=0, CPHA=0)
     initSPI(0b111, 0, 0);   // slowest SPI clk for safety (you can speed up later)
 
@@ -106,6 +108,6 @@ int main(void)
     while (1) {
         processWebRequest(USART);
 
-        receiver_spi_demo_poll();
+        // receiver_spi_demo_poll();
     }
 }
