@@ -1,4 +1,4 @@
-# MechaCrypt: Hardware-Accelerated Encrypted Messaging System
+# MechaCrypt: Hardware-Encrypted Messaging System
 
 This repository contains the source code and documentation for MechaCrypt, with both **FPGA (UPduino v3.1 )** and **MCU (Nucleo-L432KC)**.  
 
