@@ -77,7 +77,7 @@ endmodule
 //   Follows SP Network structure similar to encryption
 //
 //   Decryption follows Equivalent Inverse Cipher algorithm, mimicing encryption datapath
-//   for easier hardware reuse and debuggind
+//   for easier hardware reuse and debugging
 //   
 //   Round keys are generated at the start of decryption and stored since deccryption starts with K10
 //   and works backwards to K0. 

@@ -21,7 +21,7 @@ module sender (
     // Internal high-speed oscillator
     logic clk;
     HSOSC hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz    
-
+        
     // AES Encryption Module
     logic done;
     logic [127:0] ciphertext;
@@ -70,5 +70,5 @@ module sender (
         .tx_clk    (tx_clk),
         .send_done (send_done)
     );
-
+    
 endmodule
