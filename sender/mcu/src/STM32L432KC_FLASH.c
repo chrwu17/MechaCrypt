@@ -1,11 +1,9 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 09/30/25
-
-// Taken from the E155 Course Website
-
-// STM32L432KC_FLASH.c
-// Source code for FLASH functions
+/**
+ * @file STM32L432KC_FLASH.c
+ * @author Christian Wu
+ * @date 2025-09-30
+ * @brief Source code for FLASH functions. Taken from the E155 Course Website
+ */
 
 #include "../lib/STM32L432KC_FLASH.h"
 

@@ -1,10 +1,18 @@
-// webpage.h - Receiver-side HTTP + shared state
+/**
+ * @file webpage.h
+ * @author Christian Wu
+ * @date 2025-11-19
+ * @brief Header file for receiver webpage functions.
+ */
+
 #ifndef WEBPAGE_H
 #define WEBPAGE_H
 
 #include <stdint.h>
 #include "STM32L432KC.h"
-#include "main.h"   // for MAX_BLOCKS, BUFF_LEN, LED_PIN, etc.
+
+#define MAX_BLOCKS     64           // number of blocks UI can stage
+#define BUFF_LEN       512          // HTTP request line buffer
 
 /**
  * Shared state for received plaintext blocks from FPGA.

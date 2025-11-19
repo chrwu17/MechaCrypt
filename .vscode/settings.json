@@ -1,5 +1,8 @@
 {
     "files.associations": {
-        "stm32l432kc.h": "c"
+        "stm32l432kc.h": "c",
+        "stm32l432kc_rcc.h": "c",
+        "stm32l432kc_gpio.h": "c",
+        "stm32l432kc_tim.h": "c"
     }
 }

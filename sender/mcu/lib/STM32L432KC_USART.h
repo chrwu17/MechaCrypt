@@ -1,11 +1,9 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 09/30/25
-
-// Taken from the E155 Course Website
-
-// STM32L432KC_USART.h
-// Header for USART functions
+/**
+ * @file STM32L432KC_USART.h
+ * @author Christian Wu
+ * @date 2024-11-19
+ * @brief Header file for USART functions. Taken from the E155 Course Website.
+ */
 
 #ifndef STM32L4_USART_H
 #define STM32L4_USART_H

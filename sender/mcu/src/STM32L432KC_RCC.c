@@ -1,11 +1,9 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 09/30/25
-
-// Taken from the E155 Course Website
-
-// STM32F401RE_RCC.c
-// Source code for RCC functions
+/**
+ * @file STM32L432KC_RCC.c
+ * @author Christian Wu
+ * @date 2025-09-30
+ * @brief Source code for RCC functions. Taken from the E155 Course Website
+ */
 
 #include "../lib/STM32L432KC_RCC.h"
 

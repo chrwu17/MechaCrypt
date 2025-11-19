@@ -1,14 +1,20 @@
+/**
+ * @file main.h
+ * @author Christian Wu
+ * @date 2024-11-19
+ * @brief Main header file for MechaCrypt Sender MCU
+ */
+
 #ifndef MAIN_H
 #define MAIN_H
 
 #include <stdint.h>
 #include "STM32L432KC.h"
-#include "STM32L432KC_GPIO.h"
-#include "STM32L432KC_USART.h"
-#include "STM32L432KC_TIM.h"
+#include "webpage.h"
+#include "trng.h"
 
 // ===== Project-wide constants =====
-#define LED_PIN        PB8         // Adjust to your board's LED if different
+#define LED_PIN        PB8         // Debug LED
 #define LOAD_PIN       PA5          // MCU -> FPGA (start/load)
 #define DONE_PIN       PA6          // FPGA -> MCU (done signal)
 

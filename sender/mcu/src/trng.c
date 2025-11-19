@@ -1,16 +1,12 @@
+/**
+ * @file trng.c
+ * @author Christian Wu
+ * @date 2024-11-19
+ * @brief Source file for True Random Number Generator (TRNG) functions.
+ */
+
 #include "../lib/trng.h"
 #include <stm32l432xx.h>
-
-/*
-  STM32L4 RNG bring-up (portable across header variants):
-
-  - RNG needs a 48 MHz clock (CLK48). We turn on HSI48 and select it for CLK48.
-  - Some L4 headers expose RNG_SR_xxx as CEIS/SEIS (interrupt status) or CECS/SECS (current status).
-    We define macros to detect either and treat them as "error present".
-  - To recover from seed/clock errors portably, we toggle RNGEN (disable -> small delay -> enable).
-
-  This file intentionally avoids RNG_CR_CED because not all L4 device headers define it.
-*/
 
 /* --------- Portable error-bit detection --------- */
 #if defined(RNG_SR_SEIS)

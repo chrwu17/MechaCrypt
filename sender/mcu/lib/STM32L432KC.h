@@ -1,11 +1,9 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 09/30/25
-
-// Taken from the E155 Course Website
-
-// STM32L432KC.h
-// Header to include all other STM32L432KC libraries.
+/**
+ * @file STM32L432KC.h
+ * @author Christian Wu
+ * @date 2025-09-30
+ * @brief Header to include all other STM32L432KC libraries.
+ */
 
 #ifndef STM32L4_H
 #define STM32L4_H
@@ -18,13 +16,13 @@
 
 // Include other peripheral libraries
 
+#include "STM32L432KC_FLASH.h"
 #include "STM32L432KC_GPIO.h"
 #include "STM32L432KC_RCC.h"
-#include "STM32L432KC_TIM.h"
-#include "STM32L432KC_FLASH.h"
-#include "STM32L432KC_USART.h"
 #include "STM32L432KC_SPI.h"
-#include "STM32L432KC_I2C_bb.h"
+#include "STM32L432KC_TIM.h"
+#include "STM32L432KC_USART.h"
+
 
 // Global defines
 

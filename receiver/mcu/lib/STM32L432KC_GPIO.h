@@ -1,11 +1,9 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 09/30/25
-
-// Taken from the E155 Course Website
-
-// STM32L432KC_GPIO.h
-// Header for GPIO functions
+/**
+ * @file STM32L432KC_GPIO.h
+ * @author Christian Wu
+ * @date 2025-09-30
+ * @brief Header for GPIO Functions. Taken from the E155 Course Website
+ */
 
 #ifndef STM32L4_GPIO_H
 #define STM32L4_GPIO_H

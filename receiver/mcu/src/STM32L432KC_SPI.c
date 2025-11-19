@@ -1,7 +1,11 @@
+/**
+ * @file STM32L432KC_SPI.c
+ * @author Christian Wu
+ * @date 2025-11-19
+ * @brief Source code for SPI functions. Taken from the E155 Lecture
+ */
+
 #include "../lib/STM32L432KC.h"
-#include "../lib/STM32L432KC_SPI.h"
-#include "../lib/STM32L432KC_GPIO.h"
-#include "../lib/STM32L432KC_RCC.h"
 
 void initSPI(int br, int cpol, int cpha) {
 

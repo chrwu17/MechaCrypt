@@ -1,5 +1,10 @@
-// STM32L432KC_I2C.c
-#include "../lib/STM32L432KC.h"
+/**
+ * @file STM32L432KC_I2C.c
+ * @author Christian Wu
+ * @date 2025-11-19
+ * @brief Source code for I2C functions. 
+ */
+
 #include "../lib/STM32L432KC_I2C.h"
 #include "../lib/STM32L432KC_GPIO.h"
 #include "../lib/STM32L432KC_RCC.h"
@@ -30,11 +35,10 @@ void initI2C1(void) {
 
     I2C1->CR1 &= ~I2C_CR1_PE;   // Disable I2C1 before configuring
 
-    // Example 100kHz timing for ~80 MHz system clock (adjust if needed)
-    // This value may need tuning for your exact clock config.
+    // 100kHz timing for ~80 MHz system clock 
     I2C1->TIMINGR = 0x10909CEC;
 
-    // Enable auto-end and ACK by default (optional)
+    // Enable auto-end and ACK by default
     I2C1->CR2 = 0;
 
     // Enable I2C1 peripheral

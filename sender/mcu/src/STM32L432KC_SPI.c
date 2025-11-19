@@ -1,5 +1,9 @@
-// STM32L432KC_SPI.c
-// Source code for SPI functions
+/**
+ * @file STM32L432KC_SPI.c
+ * @author Christian Wu
+ * @date 2025-09-30
+ * @brief Source code for SPI functions. Taken from E155 Course Lecture
+ */
 
 #include "../lib/STM32L432KC.h"
 #include "../lib/STM32L432KC_SPI.h"

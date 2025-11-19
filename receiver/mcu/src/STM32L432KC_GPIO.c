@@ -1,11 +1,14 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 09/30/25
+/**
+ * @file STM32L432KC_GPIO.c
+ * @author Christian Wu
+ * @date 2025-09-30
+ * @brief Source code for GPIO functions. Taken from the E155 Course Website
+ */
 
 #include "../lib/STM32L432KC_RCC.h"
 #include "../lib/STM32L432KC_GPIO.h"
 
-// These are your I2C pins — never modify them in pinMode()
+// Pins used for I2C. Do not change
 #define I2C_SCL_PIN PA9
 #define I2C_SDA_PIN PA10
 
@@ -35,7 +38,7 @@ GPIO_TypeDef * gpioPinToBase(int gpio_pin) {
 
 void pinMode(int gpio_pin, int function) {
 
-    // 🚨 Prevent ANY code from destroying I2C pins
+    // Prevent changing I2C pins
     if (gpio_pin == I2C_SCL_PIN || gpio_pin == I2C_SDA_PIN)
         return;
 

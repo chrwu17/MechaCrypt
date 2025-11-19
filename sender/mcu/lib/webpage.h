@@ -1,3 +1,10 @@
+/**
+ * @file webpage.h
+ * @author Christian Wu
+ * @date 2024-11-19
+ * @brief Header file for webpage handling and MechaCrypt SPI functions.
+ */
+
 #ifndef WEBPAGE_H
 #define WEBPAGE_H
 

@@ -1,11 +1,9 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 09/30/25
-
-// Taken from the E155 Course Website
-
-// STM32L432KC_FLASH.h
-// Header for FLASH functions
+/**
+ * @file STM32L432KC_FLASH.h
+ * @author Christian Wu
+ * @date 2025-09-30
+ * @brief Header for FLASH functions. Taken from the E155 Course Website
+ */
 
 #ifndef STM32L4_FLASH_H
 #define STM32L4_FLASH_H

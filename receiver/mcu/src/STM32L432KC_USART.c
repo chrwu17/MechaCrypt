@@ -1,16 +1,11 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 09/30/25
-
-// Taken from the E155 Course Website
-
-// STM32L432KC_USART.c
-// Source code for USART functions
+/**
+ * @file STM32L432KC_USART.c
+ * @author Christian Wu
+ * @date 2025-11-19
+ * @brief Source code for USART functions. Taken from the E155 Course Website. Modified to use PB6/PB7 instead of PA9/PA10
+ */
 
 #include "../lib/STM32L432KC.h"
-#include "../lib/STM32L432KC_USART.h"
-#include "../lib/STM32L432KC_GPIO.h"
-#include "../lib/STM32L432KC_RCC.h"
 
 USART_TypeDef * id2Port(int USART_ID) {
     USART_TypeDef * USART;
@@ -26,8 +21,6 @@ USART_TypeDef * id2Port(int USART_ID) {
     }
     return USART;
 }
-
-// In STM32L432KC_USART.c
 
 USART_TypeDef * initUSART(int USART_ID, int baud_rate) {
     // Enable GPIO clocks

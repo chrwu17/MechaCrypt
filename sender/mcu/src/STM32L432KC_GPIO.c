@@ -1,11 +1,9 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 09/30/25
-
-// Taken from the E155 Course Website
-
-// STM32L432KC_GPIO.c
-// Source code for GPIO functions
+/**
+ * @file STM32L432KC_GPIO.c
+ * @author Christian Wu
+ * @date 2025-09-30
+ * @brief Source code for GPIO functions. Taken from the E155 Course Website
+ */
 
 #include "../lib/STM32L432KC_RCC.h"
 #include "../lib/STM32L432KC_GPIO.h"

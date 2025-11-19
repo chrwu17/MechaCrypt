@@ -1,11 +1,4 @@
-#include "../lib/webpage.h"
-#include "../lib/STM32L432KC_USART.h"
-#include "../lib/STM32L432KC_GPIO.h"
-#include "../lib/STM32L432KC_TIM.h"
-#include "../lib/STM32L432KC_SPI.h"
-#include "../lib/STM32L432KC.h"
 #include "../lib/main.h"
-#include "../lib/trng.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -30,7 +23,7 @@ static volatile tx_state_t tx_state = TX_IDLE;
 static volatile int current_idx = -1;     // index of block currently sent (awaiting DONE)
 static volatile int next_idx = 0;         // next candidate index to send
 
-// LED cues (reuse same style as elsewhere)
+// LED debug
 static void led_blink_short(void) {
   digitalWrite(LED_PIN, 1);
   delay_millis(TIM15, 150);
@@ -194,11 +187,10 @@ static void try_send_next_ready(void) {
 
 // ----------------- Public: init IO + SPI -----------------
 void mechacrypt_init_io_and_spi(void) {
-  // Configure handshake pins
   pinMode(LOAD_PIN, GPIO_OUTPUT);  digitalWrite(LOAD_PIN, 0);
-  pinMode(DONE_PIN, GPIO_INPUT);   // external pull preferred on FPGA board
+  pinMode(DONE_PIN, GPIO_INPUT);  
 
-  // SPI is already provided; pick reasonable defaults: BR=0b011 (~ clk/16), CPOL=0, CPHA=0
+  // init SPI
   initSPI(0b011, 0, 0);
 
   // Ensure CS idle high (SPI driver made SPI_CE output)

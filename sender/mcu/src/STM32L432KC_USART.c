@@ -1,11 +1,9 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 09/30/25
-
-// Taken from the E155 Course Website
-
-// STM32L432KC_USART.c
-// Source code for USART functions
+/**
+ * @file STM32L432KC_USART.c
+ * @author Christian Wu
+ * @date 2025-09-30
+ * @brief Source code for USART functions. Taken from the E155 Course Website
+ */
 
 #include "../lib/STM32L432KC.h"
 #include "../lib/STM32L432KC_USART.h"

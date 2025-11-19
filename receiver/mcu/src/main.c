@@ -1,22 +1,12 @@
-/*
- * Receiver main.c
- *
- * Mode: decrypt blocks from FPGA, expose them over HTTP,
- *       and show basic status on the LCD.
- *
- * - USART1 goes out on PB6 (TX) / PB7 (RX) to ESP8266.
- * - PA9 / PA10 are used ONLY for bit-banged I2C to the LCD.
+/**
+ * @file main.c
+ * @author Christian Wu
+ * @date 2025-11-19
+ * @brief Main file for MechaCrypt receiver MCU firmware.
  */
 
 #include "../lib/main.h"
-#include "../lib/webpage.h"
-#include "../lib/STM32L432KC.h"
-#include "../lib/STM32L432KC_TIM.h"
-#include "../lib/STM32L432KC_USART.h"
-#include "../lib/STM32L432KC_GPIO.h"
-#include "../lib/STM32L432KC_I2C.h" 
-// Adjust these includes to match your actual LCD/I2C header names:
-#include "../lib/lcd_i2c.h"
+
 
 // ----------------- Local LCD handle -----------------
 static lcd_i2c_t lcd;
@@ -72,10 +62,10 @@ int main(void)
     // Timer for delay_millis (used elsewhere in project)
     initTIM(TIM15);
 
-    // Bring up USART1 at 125000 baud (match your ESP8266 config)
+    // Initiallize USART1 for ESP8266
     USART_TypeDef *USART = initUSART(USART1_ID, 125000);
 
-    // --- Remap USART1 to PB6 (TX) / PB7 (RX) ---
+    // --- Configure USART1 to PB6 (TX) / PB7 (RX) ---
 
     // Configure PB6/PB7 as alternate function pins
     pinMode(PB6, GPIO_ALT);
@@ -89,13 +79,13 @@ int main(void)
     GPIOB->AFR[0] |= (0b0111 << GPIO_AFRL_AFSEL6_Pos) |
                      (0b0111 << GPIO_AFRL_AFSEL7_Pos);
 
-    // Now reclaim PA9/PA10 for bit-banged I2C to the LCD
+    // Call LCD initialization function
     lcd_hw_init();
 
-    receiver_demo_init_plaintext();  // optional demo init
+    receiver_demo_init_plaintext();  // Sample demo plaintext data for Midpoint check in
 
-        // SPI init: slow baud, mode 0 (CPOL=0, CPHA=0)
-    initSPI(0b111, 0, 0);   // slowest SPI clk for safety (you can speed up later)
+    // Initialize SPI for FPGA communication
+    initSPI(0b111, 0, 0);  
 
     // Chip select pin for FPGA
     pinMode(SPI_CE, GPIO_OUTPUT);
@@ -104,10 +94,10 @@ int main(void)
 
     // Main loop:
     //  - service HTTP
-    //  - (your SPI receiver logic will call receiver_store_block())
+    //  - SPI fetches blocks from FPGA
     while (1) {
         processWebRequest(USART);
 
-        // receiver_spi_demo_poll();
+        // receiver_spi_demo_poll(); // Uncomment to enable SPI fetching
     }
 }

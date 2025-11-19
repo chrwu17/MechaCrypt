@@ -1,4 +1,9 @@
-// STM32L432KC_I2C.h
+/**
+ * @file STM32L432KC_I2C.h
+ * @author Christian Wu
+ * @date 2025-11-19
+ * @brief Header for I2C functions
+ */
 #ifndef STM32L4_I2C_H
 #define STM32L4_I2C_H
 

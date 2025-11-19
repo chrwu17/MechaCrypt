@@ -1,11 +1,9 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 10/17/25
-
-// Taken from E155 SPI Lecture
-
-// STM32L432KC_SPI.h
-// Header for SPI functions
+/**
+ * @file STM32L432KC_SPI.h
+ * @author Christian Wu
+ * @date 2025-10-17
+ * @brief Header for SPI functions. Taken from E155 SPI Lecture
+ */
 
 #ifndef STM32L4_SPI_H
 #define STM32L4_SPI_H

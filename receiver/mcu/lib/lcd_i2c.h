@@ -1,3 +1,10 @@
+/**
+ * @file lcd_i2c.h
+ * @author Christian Wu
+ * @date 2025-11-19
+ * @brief SunFounder LCD I2C (PCF8574) interface header. Provided by the manufacturer
+ */
+
 #ifndef LCD_I2C_H
 #define LCD_I2C_H
 

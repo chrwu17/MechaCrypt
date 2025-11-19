@@ -1,3 +1,10 @@
+/**
+ * @file trng.h
+ * @author Christian Wu
+ * @date 2024-11-19
+ * @brief Header file for True Random Number Generator (TRNG) functions.
+ */
+
 #ifndef TRNG_H
 #define TRNG_H
 

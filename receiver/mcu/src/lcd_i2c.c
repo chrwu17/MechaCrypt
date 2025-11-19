@@ -1,3 +1,10 @@
+/**
+ * @file lcd_i2c.c
+ * @author Christian Wu
+ * @date 2025-11-19
+ * @brief Source code for SunFounder LCD I2C (PCF8574) functions Provided by the manufacturer in C++ and converted to C.
+ */
+
 #include "../lib/lcd_i2c.h"
 
 // pulse enable, matching your old working timing

@@ -1,3 +1,10 @@
+/**
+ * @file STM32L432KC_TIM.c
+ * @author Christian Wu
+ * @date 2025-09-30
+ * @brief Source code for TIM functions. Taken from the E155 Course Website
+ */
+
 #include "../lib/STM32L432KC_TIM.h"
 #include "../lib/STM32L432KC_RCC.h"
 

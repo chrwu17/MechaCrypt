@@ -1,11 +1,9 @@
-// Christian Wu
-// chrwu@g.hmc.edu
-// 09/30/25
-
-// Taken from the E155 Course Website
-
-// STM32L432KC_RCC.h
-// Header for RCC functions
+/**
+ * @file STM32L432KC_RCC.h
+ * @author Christian Wu
+ * @date 2025-09-30
+ * @brief Header for RCC functions. Taken from the E155 Course Website
+ */
 
 #ifndef STM32L4_RCC_H
 #define STM32L4_RCC_H

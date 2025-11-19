@@ -1,8 +1,10 @@
-#include "../lib/webpage.h"
-#include "../lib/STM32L432KC_USART.h"
-#include "../lib/STM32L432KC_GPIO.h"
-#include "../lib/STM32L432KC_TIM.h"
-#include "../lib/STM32L432KC.h"
+/**
+ * @file webpage.c
+ * @author Christian Wu
+ * @date 2024-11-19
+ * @brief Webpage and HTTP request handling for MechaCrypt Receiver MCU
+ */
+
 #include "../lib/main.h"
 
 #include <string.h>
@@ -14,13 +16,13 @@
 // ======================================================
 
 volatile uint8_t received_blocks[MAX_BLOCKS][16];
-volatile uint8_t plaintext_blocks[MAX_BLOCKS][16];  // NEW: plaintext storage
+volatile uint8_t plaintext_blocks[MAX_BLOCKS][16]; 
 volatile uint8_t have_received[MAX_BLOCKS];
 volatile uint16_t total_received      = 0;
 volatile uint16_t debug_request_count = 0;
 
 
-// (optional) you can hook this to LED for quick visual debug
+// Debug LED
 static void led_blink_short(void) {
     digitalWrite(LED_PIN, 1);
     delay_millis(TIM15, 100);
@@ -219,9 +221,6 @@ static inline int line_has_lf(const char *buf) {
 static void send_json_status(USART_TypeDef *USART) {
     char numbuf[16];
 
-    // REMOVE this line:
-    // sendString(USART, (char*)http_header_json);
-
     // JSON body only:
     sendString(USART, "{ \"total_received\": ");
 
@@ -229,8 +228,6 @@ static void send_json_status(USART_TypeDef *USART) {
     sendString(USART, numbuf);
     sendString(USART, ", \"blocks\":[");
 
-    // Use whatever buffer you want exposed to the UI.
-    // If you have plaintext_blocks, use that; otherwise received_blocks is fine.
     for (uint16_t i = 0; i < total_received; i++) {
         sendChar(USART, '[');
         for (int j = 0; j < 16; j++) {
@@ -312,7 +309,7 @@ void receiver_demo_init_plaintext(void)
 void receiver_store_block(uint16_t idx, const uint8_t blk[16]) {
     if (idx >= MAX_BLOCKS) return;
 
-    // Raw data from FPGA (ciphertext or whatever you like)
+    // Raw data from FPGA 
     memcpy((void*)received_blocks[idx], blk, 16);
 
     // For now, treat it as “plaintext” too (later you can copy decrypted data here)
