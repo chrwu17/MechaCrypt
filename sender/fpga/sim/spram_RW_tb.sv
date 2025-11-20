@@ -67,6 +67,8 @@ module spram_RW_tb;
         // Compare results
         if (cipher_out === ciphertext)
             $display("All tests pass!");
+            $display("Expected: %h", ciphertext);
+            $display("Received: %h", cipher_out);
         else begin
             $error("Testbench failed!");
             $display("Expected: %h", ciphertext);
