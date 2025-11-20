@@ -26,6 +26,9 @@ int main(void) {
   // Bring up USART for the web server
   USART_TypeDef *USART = initUSART(USART1_ID, 125000);
 
+  // Init TRNG
+  initTRNG();
+
   // Configure SPI and handshake pins (LOAD/DONE)
   mechacrypt_init_io_and_spi();
 
