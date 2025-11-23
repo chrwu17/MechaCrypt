@@ -22,7 +22,7 @@ This repository contains the source code and documentation for MechaCrypt, with 
 | Hardware  | Lattice UP5K FPGA, STM32L432KC MCU, ESP8266 |
 | Languages | SystemVerilog, Embedded C, HTML, CSS        |
 | Protocols | I2C, SPI, USART, HTTP                       |
-| UI        | Web dashboard/server + 16×4 LCD             |
+| UI        | Web dashboard/server + 20×4 LCD             |
 
 ## Authors
 
