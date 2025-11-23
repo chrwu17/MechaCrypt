@@ -16,7 +16,7 @@ module aesDecryption(
            output logic done_decrypt);
                     
     logic [127:0] key, plaintext, cyphertext;
-    logic clk;
+    // logic clk;
     
     // Synchronize load signal to the clk instead of sck
     logic load_meta, load_sync;
@@ -26,7 +26,7 @@ module aesDecryption(
     end
 
     // Internal high-speed oscillator to generate slow clock
-    HSOSC hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
+    // HSOSC hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
             
     aes_spi spi(sck, sdi, sdo, done_decrypt, key, cyphertext, plaintext);
 
@@ -249,14 +249,14 @@ endmodule
 //   Section 5.1.1, Figure 7
 /////////////////////////////////////////////
 module sbox_sync(input		logic [7:0] a,
-                 input	 	logic clk,
+                 input	 	logic       clk,
                  output 	logic [7:0] y);
             
     // sbox implemented as a ROM
     // This module is synchronous and will be inferred using BRAMs (Block RAMs)
     logic [7:0] sbox [0:255];
 
-    initial   $readmemh("sbox.txt", sbox);
+    initial   $readmemh("D:/MicroPs/MechaCrypt/receiver/fpga/src/sbox.txt", sbox);
     
     	// Synchronous version
     	always_ff @(posedge clk) begin
@@ -276,7 +276,7 @@ module inv_sbox_sync(input  logic [7:0] a,
     
     logic [7:0] invsbox [0:255];
     
-    initial $readmemh("inv_sbox.txt", invsbox);
+    initial $readmemh("D:/MicroPs/MechaCrypt/receiver/fpga/src/inv_sbox.txt", invsbox);
     
     always_ff @(posedge clk) begin
         y <= invsbox[a];
@@ -325,7 +325,7 @@ module inv_mixcolumn(input  logic [31:0] a,
 endmodule
 
 /////////////////////////////////////////////                  
-// galois_mult_ext
+// Extended Galois Field Multiplication
 //   Provides GF(2^8) multiplication helpers for AES inverse MixColumns coefficients
 //   performs polynomial multiplication by x^i for i in {1,2,3} via xtime
 //   then combines to get {09, 0B, 0D, 0E} multiplications as shown below:
@@ -335,8 +335,6 @@ endmodule
 //        0x0E = x^3 + x^2 + x
 //   and reduction mod the AES polynomial 0x11B (x^8+x^4+x^3+x+1)
 /////////////////////////////////////////////
-
-module galois_mult_ext;
 
     // xtime (×2 in GF(2^8)) with reduction mod 0x11B
     function automatic [7:0] xtime(input [7:0] a);
@@ -372,7 +370,6 @@ module galois_mult_ext;
         mulE = mul8(a) ^ mul4(a) ^ mul2(a); // 0x0E
     endfunction
 
-endmodule
 
 /////////////////////////////////////////////                  
 // inv_subBytes
