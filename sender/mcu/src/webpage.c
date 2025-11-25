@@ -1,4 +1,5 @@
 #include "../lib/main.h"
+#include "../lib/bridge.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -8,10 +9,14 @@ volatile uint8_t plaintext_blocks[MAX_BLOCKS][16];
 volatile uint8_t keys[MAX_BLOCKS][16];
 volatile uint8_t have_block[MAX_BLOCKS];
 volatile uint16_t total_blocks = 0;
-volatile uint16_t debug_request_count = 0;  // Track # of requests received
-volatile int debug_last_block_idx = -1;     // Last block index parsed
-volatile int debug_last_got_bytes = 0;      // How many bytes decoded
-volatile int debug_last_trng_result = -99;  // Last TRNG result
+volatile uint16_t debug_request_count = 0;
+volatile int debug_last_block_idx = -1;
+volatile int debug_last_got_bytes = 0;
+volatile int debug_last_trng_result = -99;
+
+// Bridge state tracking
+volatile uint8_t message_length = 0;
+volatile int bridge_keys_sent = 0;  // Track if all keys were sent to FPGA 2
 
 // ------------ Transmit state machine (SPI + LOAD/DONE) ------------
 typedef enum {
@@ -20,8 +25,8 @@ typedef enum {
 } tx_state_t;
 
 static volatile tx_state_t tx_state = TX_IDLE;
-static volatile int current_idx = -1;     // index of block currently sent (awaiting DONE)
-static volatile int next_idx = 0;         // next candidate index to send
+static volatile int current_idx = -1;
+static volatile int next_idx = 0;
 
 // LED debug
 static void led_blink_short(void) {
@@ -36,6 +41,13 @@ static void led_error_blink(void) {
     digitalWrite(LED_PIN, 0);
     delay_millis(TIM15, 50);
   }
+}
+
+// LED pattern for bridge send (long pulse)
+static void led_blink_bridge(void) {
+  digitalWrite(LED_PIN, 1);
+  delay_millis(TIM15, 300);
+  digitalWrite(LED_PIN, 0);
 }
 
 // ----------------- HTTP helpers -----------------
@@ -101,8 +113,8 @@ const char webpage[] =
 "function toAsciiPrintable(b){return Array.from(b).map(x=>x>=32&&x<=126?String.fromCharCode(x):'.').join('')}"
 "function copy(t){navigator.clipboard.writeText(t).catch(()=>{})}"
 "function sendBlock(i,hex){return fetch(`/send?i=${i}&hex=${encodeURIComponent(hex)}`,{method:'GET'})}"
-"function startTransmission(){return fetch('/start',{method:'GET'});}"
-"function convert(){const text=msgEl.value||\"\";let bytes=asciiToBytes(text);bytes=padPkcs7(bytes);const blocks=toBlocks(bytes);summary.innerHTML=`<strong>Input length:</strong> ${text.length} chars &nbsp;&nbsp; <strong>Blocks:</strong> ${blocks.length} × 16 bytes`;tbody.innerHTML=\"\";let allHex=[];blocks.forEach((blk,i)=>{const ascii=toAsciiPrintable(blk);const hex=toHexLine(blk);allHex.push(hex);const tr=document.createElement('tr');const tdIdx=document.createElement('td');tdIdx.className='right mono';tdIdx.textContent=i;const tdAscii=document.createElement('td');tdAscii.className='mono wrap';tdAscii.textContent=ascii;const tdHex=document.createElement('td');tdHex.className='mono wrap';tdHex.innerHTML=`<code>${hex}</code>`;tr.appendChild(tdIdx);tr.appendChild(tdAscii);tr.appendChild(tdHex);tbody.appendChild(tr)});btnCopyAll.onclick=()=>copy(allHex.join(' '));btnSendAll.onclick=async()=>{btnSendAll.disabled=true;btnSendAll.textContent='Loading...';for(let i=0;i<allHex.length;i++){await sendBlock(i,allHex[i]);}btnSendAll.textContent='Starting...';await startTransmission();btnSendAll.textContent='Sent';};out.style.display=blocks.length?\"block\":\"none\"}"
+"function startTransmission(len){return fetch(`/start?len=${len}`,{method:'GET'});}"
+"function convert(){const text=msgEl.value||\"\";let bytes=asciiToBytes(text);bytes=padPkcs7(bytes);const blocks=toBlocks(bytes);summary.innerHTML=`<strong>Input length:</strong> ${text.length} chars &nbsp;&nbsp; <strong>Blocks:</strong> ${blocks.length} × 16 bytes`;tbody.innerHTML=\"\";let allHex=[];blocks.forEach((blk,i)=>{const ascii=toAsciiPrintable(blk);const hex=toHexLine(blk);allHex.push(hex);const tr=document.createElement('tr');const tdIdx=document.createElement('td');tdIdx.className='right mono';tdIdx.textContent=i;const tdAscii=document.createElement('td');tdAscii.className='mono wrap';tdAscii.textContent=ascii;const tdHex=document.createElement('td');tdHex.className='mono wrap';tdHex.innerHTML=`<code>${hex}</code>`;tr.appendChild(tdIdx);tr.appendChild(tdAscii);tr.appendChild(tdHex);tbody.appendChild(tr)});btnCopyAll.onclick=()=>copy(allHex.join(' '));btnSendAll.onclick=async()=>{btnSendAll.disabled=true;btnSendAll.textContent='Loading...';for(let i=0;i<allHex.length;i++){await sendBlock(i,allHex[i]);}btnSendAll.textContent='Starting...';const origLen=text.length;await startTransmission(origLen);btnSendAll.textContent='Sent';};out.style.display=blocks.length?\"block\":\"none\"}"
 "msgEl.addEventListener('input',()=>{const n=msgEl.value.length;statsEl.textContent=`${n} char${n===1?'':'s'}`});"
 "btnConvert.addEventListener('click',()=>{convert();btnSendAll.disabled=false;btnSendAll.textContent='Send';});"
 "msgEl.value=\"\";statsEl.textContent=\"0 chars\";"
@@ -148,12 +160,25 @@ static inline int done_is_high(void) {
 }
 
 static void spi_send_pair_blocking(const uint8_t *pt16, const uint8_t *key16) {
-  // Protocol: LOAD high, CS low, send 16 pt + 16 key, CS high, LOAD low
+  // Protocol: LOAD high, CS low, send 16 pt + 16 key bit-by-bit, CS high, LOAD low
   digitalWrite(LOAD_PIN, 1);
   digitalWrite(SPI_CE, 0);
 
-  for (int i=0;i<16;i++) (void)spiSendReceive((char)pt16[i]);
-  for (int i=0;i<16;i++) (void)spiSendReceive((char)key16[i]);
+  // Send plaintext bit-by-bit, MSB first
+  for (int i=0; i<16; i++) {
+    for (int b=7; b>=0; b--) {
+      char bit = (pt16[i] >> b) & 1;
+      (void)spiSendReceive(bit ? 0xFF : 0x00);
+    }
+  }
+
+  // Send key bit-by-bit, MSB first
+  for (int i=0; i<16; i++) {
+    for (int b=7; b>=0; b--) {
+      char bit = (key16[i] >> b) & 1;
+      (void)spiSendReceive(bit ? 0xFF : 0x00);
+    }
+  }
 
   digitalWrite(SPI_CE, 1);
   digitalWrite(LOAD_PIN, 0);
@@ -168,7 +193,6 @@ static void start_send_if_valid(int i) {
   current_idx = i;
   next_idx = i + 1;
   tx_state = TX_WAIT_DONE;
-  // visual ack of TX start
   led_blink_short();
 }
 
@@ -200,19 +224,17 @@ void mechacrypt_init_io_and_spi(void) {
   tx_state = TX_IDLE;
   current_idx = -1;
   next_idx = 0;
+  bridge_keys_sent = 0;
 }
 
 // ----------------- Public: main-loop poll -----------------
 void mechacrypt_poll_and_advance(void) {
   if (tx_state == TX_WAIT_DONE) {
-    // Wait for DONE high from FPGA
     if (done_is_high()) {
-      // Debounce-ish: brief wait for stable, then proceed
       delay_millis(TIM15, 1);
       if (done_is_high()) {
-        // DONE observed: move to next block
-        tx_state = TX_IDLE;       // drop to IDLE first
-        try_send_next_ready();    // will set WAIT_DONE if it starts one
+        tx_state = TX_IDLE;
+        try_send_next_ready();
       }
     }
   }
@@ -220,24 +242,67 @@ void mechacrypt_poll_and_advance(void) {
 
 // ----------------- Public: Start after a specific block if it's the first -----------------
 void mechacrypt_maybe_start_after_block(int block_idx) {
-  // If this is the very first block (index 0) and we're idle, start immediately.
-  if (block_idx == 0 && tx_state == TX_IDLE) {
-    start_send_if_valid(0);
+  // Not used anymore - we start explicitly via /start command
+}
+
+// ----------------- Bridge: Send all keys to FPGA 2 -----------------
+static int bridge_send_all_keys(uint8_t num_blocks, uint8_t orig_length) {
+  // Send original message length first (1 byte = 8 bits)
+  bridgeSelect();
+  delay_millis(TIM15, 1);  // CS setup time
+  
+  // Send message length (8 bits)
+  for (int b = 7; b >= 0; b--) {
+    uint8_t bit = (orig_length >> b) & 1;
+    spiSendReceive(bit ? 0xFF : 0x00);
   }
+  
+  // Send number of blocks (8 bits)
+  for (int b = 7; b >= 0; b--) {
+    uint8_t bit = (num_blocks >> b) & 1;
+    spiSendReceive(bit ? 0xFF : 0x00);
+  }
+  
+  bridgeDeselect();
+  delay_millis(TIM15, 5);  // Inter-packet delay
+  
+  // Now send all keys, one at a time
+  for (int block = 0; block < num_blocks; block++) {
+    if (!have_block[block]) {
+      led_error_blink();
+      return -1;  // Missing block, can't proceed
+    }
+    
+    bridgeSelect();
+    delay_millis(TIM15, 1);
+    
+    // Send 128-bit key for this block, MSB first
+    for (int i = 0; i < 16; i++) {
+      for (int b = 7; b >= 0; b--) {
+        uint8_t bit = (keys[block][i] >> b) & 1;
+        spiSendReceive(bit ? 0xFF : 0x00);
+      }
+    }
+    
+    bridgeDeselect();
+    delay_millis(TIM15, 5);  // Inter-packet delay
+    
+    // Brief LED flash per key sent
+    if ((block % 4) == 0) {  // Flash every 4 keys to avoid too much delay
+      digitalWrite(LED_PIN, 1);
+      delay_millis(TIM15, 50);
+      digitalWrite(LED_PIN, 0);
+    }
+  }
+  
+  return 0;  // Success
 }
 
 // ----------------- Request handler -----------------
 void processWebRequest(USART_TypeDef *USART)
 {
-  // If USART is NULL, something is very wrong - just return
-  if (USART == NULL) {
-    return;
-  }
-
-  // Only process if data is available
-  if (!(USART->ISR & USART_ISR_RXNE)) {
-    return;  // No data available, return immediately
-  }
+  if (USART == NULL) return;
+  if (!(USART->ISR & USART_ISR_RXNE)) return;
 
   char request[BUFF_LEN] = {0};
   int idx = 0;
@@ -249,30 +314,26 @@ void processWebRequest(USART_TypeDef *USART)
       request[idx++] = readChar(USART);
       request[idx]   = '\0';
     } else {
-      (void)readChar(USART); // drop extra
+      (void)readChar(USART);
     }
   }
 
-  debug_request_count++;  // Increment on every request
+  debug_request_count++;
 
   // Handle: GET /send?i=##&hex=AA%20BB%20... HTTP/1.1
-  // Also handle ESP8266 format: /REQ:send?i=##&hex=...
-  // This ONLY stores the blocks, doesn't transmit via SPI yet
   if (strstr(request, "/send?") || strstr(request, "send?")) {
     uint8_t blk[16] = {0};
     int got = 0;
     int block_idx = -1;
 
-    // Parse block index
     const char *pi = strstr(request, "i=");
     if (pi) {
       block_idx = atoi(pi+2);
-      debug_last_block_idx = block_idx;  // Debug tracking
+      debug_last_block_idx = block_idx;
     }
 
     const char *ph = strstr(request, "hex=");
     if (ph) {
-      // Decode %20 -> space so we can parse "AA BB ..."
       char hexline[3*16+32] = {0};
       const char *src = ph+4; 
       char *dst = hexline;
@@ -290,46 +351,63 @@ void processWebRequest(USART_TypeDef *USART)
       }
       *dst = 0;
       got = decode_hex_list(hexline, blk, 16);
-      debug_last_got_bytes = got;  // Debug tracking
+      debug_last_got_bytes = got;
     }
 
     if (got == 16 && block_idx >= 0 && block_idx < MAX_BLOCKS) {
-      // Store plaintext block
       memcpy((void*)plaintext_blocks[block_idx], blk, 16);
       
-      // Generate TRNG key for this block
       int trng_result = read_trng((uint8_t*)keys[block_idx]);
-      debug_last_trng_result = trng_result;  // Debug tracking
+      debug_last_trng_result = trng_result;
       
       if (trng_result == 0) {
-        // Mark this block as valid and ready for SPI transmission
         have_block[block_idx] = 1;
         if (block_idx >= total_blocks) total_blocks = block_idx + 1;
-        led_blink_short();  // success: block staged in memory
-        
-        // NOTE: We do NOT start SPI transmission here anymore
-        // SPI transmission is triggered separately by the start command
+        led_blink_short();
       } else {
         have_block[block_idx] = 0;
-        led_error_blink();  // TRNG failed
+        led_error_blink();
       }
     } else {
-      // Debug: track why it failed
       debug_last_got_bytes = got;
       debug_last_block_idx = block_idx;
     }
 
-    // Minimal response; keeps UI on current page
     sendString(USART, (char*)http_header_no_content);
     return;
   }
 
-  // Handle: GET /start - Start SPI transmission of all stored blocks
+  // Handle: GET /start?len=## - Start transmission WITH bridge pre-send of ALL keys
   if (strstr(request, "/start") || strstr(request, "start")) {
-    // Only start if we're idle and have at least one block
-    if (tx_state == TX_IDLE && total_blocks > 0 && have_block[0]) {
-      start_send_if_valid(0);  // Start with block 0
-      led_blink_short();  // Visual confirmation that SPI started
+    // Parse original message length from query string
+    uint8_t orig_len = 0;
+    const char *plen = strstr(request, "len=");
+    if (plen) {
+      orig_len = (uint8_t)atoi(plen+4);
+      message_length = orig_len;
+    }
+
+    if (total_blocks > 0 && have_block[0]) {
+      // STEP 1: Send ALL keys to FPGA 2 via bridge (one SPI transaction per key)
+      led_blink_bridge();  // Long LED pulse to indicate bridge send starting
+      
+      int bridge_result = bridge_send_all_keys((uint8_t)total_blocks, orig_len);
+      
+      if (bridge_result == 0) {
+        bridge_keys_sent = 1;
+        led_blink_bridge();  // Another long pulse to confirm all keys sent
+        
+        delay_millis(TIM15, 10);  // Brief pause between bridge and encryption
+        
+        // STEP 2: Start SPI transmission to FPGA 1 (encryption)
+        if (tx_state == TX_IDLE) {
+          start_send_if_valid(0);
+        }
+      } else {
+        led_error_blink();  // Bridge send failed
+      }
+    } else {
+      led_error_blink();  // No blocks to send
     }
     
     sendString(USART, (char*)http_header_no_content);

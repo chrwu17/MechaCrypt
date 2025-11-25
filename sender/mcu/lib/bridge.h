@@ -1,35 +1,48 @@
 /*
     Header file for the bridge module
-    Implements a separate SPI interface for communication between MCU 1 and FPGA 2.
+    Implements SPI communication with a second FPGA using shared SPI bus
+    but separate chip select line.
 */
 
 #ifndef BRIDGE_H
 #define BRIDGE_H
 
-///////////////////////////////////////////////////////////////////////////////
-// Definitions
-///////////////////////////////////////////////////////////////////////////////
-
-#define SPI_CE_IN PA11
-#define SPI_SCK_IN PB3
-#define SPI_COPI_IN PB5
-#define SPI_CIPO_IN PB4 
+#include <stdint.h>
 
 ///////////////////////////////////////////////////////////////////////////////
-// Function prototypes
+// Pin Definitions for Shared SPI Bus
 ///////////////////////////////////////////////////////////////////////////////
 
-/* Enables the SPI peripheral and intializes its clock speed (baud rate), polarity, and phase.
- *    -- br: (0b000 - 0b111). The SPI clk will be the master clock / 2^(BR+1).
- *    -- cpol: clock polarity (0: inactive state is logical 0, 1: inactive state is logical 1).
- *    -- cpha: clock phase (0: data captured on leading edge of clk and changed on next edge, 
- *          1: data changed on leading edge of clk and captured on next edge)
- * Refer to the datasheet for more low-level details. */ 
-void initBridgeSPI(int br, int cpol, int cpha);
+// Shared SPI signals (same as main FPGA)
+#define BRIDGE_SCK    PB3   // Shared SPI clock
+#define BRIDGE_COPI   PB5   // Shared SPI MOSI
+#define BRIDGE_CIPO   PB4   // Shared SPI MISO (if needed)
 
-/* Transmits a character (1 byte) over SPI and returns the received character.
- *    -- send: the character to send over SPI
- *    -- return: the character received over SPI */
-char bridgeSpiSendReceive(char send);
+// Dedicated chip select for second FPGA
+#define BRIDGE_CS     PA8   // Different CS from main FPGA (PA11)
 
-#endif
+// Optional control signals for second FPGA
+#define BRIDGE_LOAD   PA7   // Load signal for FPGA 2 (if needed)
+#define BRIDGE_DONE   PA12  // Done signal from FPGA 2 (if needed)
+
+///////////////////////////////////////////////////////////////////////////////
+// Function Prototypes
+///////////////////////////////////////////////////////////////////////////////
+
+/* Initialize the bridge CS pin (SPI already initialized by main code)
+ * Call this AFTER initSPI() has been called for the main FPGA */
+void initBridgeCS(void);
+
+/* Select FPGA 2 by asserting its chip select (CS low) */
+void bridgeSelect(void);
+
+/* Deselect FPGA 2 by deasserting its chip select (CS high) */
+void bridgeDeselect(void);
+
+/* Send 16-byte key and 1-byte length to FPGA 2
+ *    -- key: pointer to 16-byte encryption key
+ *    -- length: message length byte
+ * This uses the SHARED spiSendReceive() from main SPI driver */
+void bridgeSendKeyAndLength(const uint8_t *key, uint8_t length);
+
+#endif // BRIDGE_H

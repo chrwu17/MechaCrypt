@@ -1,104 +1,73 @@
 /*
-    @author: Josaphat Ngoga
+    @author: Josaphat Ngoga (modified)
     @date:   11/16/2025
-    @description: Contains MCU 1 code to send the message length and encryption key to FPGA 2 via SPI.
+    @description: MCU code to communicate with FPGA 2 via shared SPI bus
+                  Uses separate CS line to multiplex between two FPGAs.
 */
 
-#include <stdio.h>
-#include <stdint.h>
 #include "../lib/STM32L432KC.h"
 #include "../lib/bridge.h"
 
 ///////////////////////////////////////////////////////////////////////////////
-// Custom SPI Bridge Functions
+// Bridge CS Initialization
 ///////////////////////////////////////////////////////////////////////////////
 
-/* Enables the SPI peripheral and intializes its clock speed (baud rate), polarity, and phase.
- *    -- br: (0b000 - 0b111). The SPI clk will be the master clock / 2^(BR+1).
- *    -- cpol: clock polarity (0: inactive state is logical 0, 1: inactive state is logical 1).
- *    -- cpha: clock phase (0: data captured on leading edge of clk and changed on next edge, 
- *          1: data changed on leading edge of clk and captured on next edge)
- * Refer to the datasheet for more low-level details. */ 
-void initSPI(int br, int cpol, int cpha) {
-    // Turn on GPIOA and GPIOB clock domains (GPIOAEN and GPIOBEN bits in AHB1ENR)
-    RCC->AHB2ENR |= (RCC_AHB2ENR_GPIOAEN | RCC_AHB2ENR_GPIOBEN);
+/* Initialize bridge chip select pin (SPI bus already configured) */
+void initBridgeCS(void) {
+    // Configure CS pin as output, start high (inactive)
+    pinMode(BRIDGE_CS, GPIO_OUTPUT);
+    digitalWrite(BRIDGE_CS, 1);  // CS idle high
     
-    RCC->APB2ENR |= RCC_APB2ENR_SPI1EN; // Turn on SPI1 clock domain (SPI1EN bit in APB2ENR)
-
-    // Initially assigning SPI pins
-    pinMode(SPI_SCK, GPIO_ALT); // SPI1_SCK
-    pinMode(SPI_CIPO, GPIO_ALT); // SPI1_MISO
-    pinMode(SPI_COPI, GPIO_ALT); // SPI1_MOSI
-    pinMode(SPI_CE, GPIO_OUTPUT); //  Manual CS
-
-    // Set output speed type to high for SCK
-    GPIOB->OSPEEDR |= (GPIO_OSPEEDR_OSPEED3);
-
-    // Set to AF05 for SPI alternate functions
-    GPIOB->AFR[0] |= _VAL2FLD(GPIO_AFRL_AFSEL3, 5);
-    GPIOB->AFR[0] |= _VAL2FLD(GPIO_AFRL_AFSEL4, 5);
-    GPIOB->AFR[0] |= _VAL2FLD(GPIO_AFRL_AFSEL5, 5);
+    // Optional: configure additional control pins for FPGA 2
+    pinMode(BRIDGE_LOAD, GPIO_OUTPUT);
+    digitalWrite(BRIDGE_LOAD, 0);
     
-    SPI1->CR1 |= _VAL2FLD(SPI_CR1_BR, br); // Set baud rate divider
-
-    SPI1->CR1 |= (SPI_CR1_MSTR);
-    SPI1->CR1 &= ~(SPI_CR1_CPOL | SPI_CR1_CPHA | SPI_CR1_LSBFIRST | SPI_CR1_SSM);
-    SPI1->CR1 |= _VAL2FLD(SPI_CR1_CPHA, cpha);
-    SPI1->CR1 |= _VAL2FLD(SPI_CR1_CPOL, cpol);
-    SPI1->CR2 |= _VAL2FLD(SPI_CR2_DS, 0b0111);
-    SPI1->CR2 |= (SPI_CR2_FRXTH | SPI_CR2_SSOE);
-
-    SPI1->CR1 |= (SPI_CR1_SPE); // Enable SPI
-}
-
-/* Transmits a character (1 byte) over SPI and returns the received character.
- *    -- send: the character to send over SPI
- *    -- return: the character received over SPI */
-char spiSendReceive(char send) {
-    while(!(SPI1->SR & SPI_SR_TXE)); // Wait until the transmit buffer is empty
-    *(volatile char *) (&SPI1->DR) = send; // Transmit the character over SPI
-    while(!(SPI1->SR & SPI_SR_RXNE)); // Wait until data has been received
-    char rec = (volatile char) SPI1->DR;
-    return rec; // Return received character
+    pinMode(BRIDGE_DONE, GPIO_INPUT);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// Bridge Select/Deselect
+///////////////////////////////////////////////////////////////////////////////
 
+void bridgeSelect(void) {
+    digitalWrite(BRIDGE_CS, 0);  // CS low = active
+}
 
-void bridge_send_key_and_length(uint8_t *key, uint8_t length)
-{
-    int i, b;
+void bridgeDeselect(void) {
+    digitalWrite(BRIDGE_CS, 1);  // CS high = inactive
+}
 
-    //-----------------------------------------
-    // 1. Start FPGA receive
-    //-----------------------------------------
-    digitalWrite(CS_IN_PIN, 0);   // CS low (active)
+///////////////////////////////////////////////////////////////////////////////
+// Bridge Communication
+///////////////////////////////////////////////////////////////////////////////
 
-    //-----------------------------------------
-    // 2. Send 16-byte key MSB-first
-    //-----------------------------------------
-    for (i = 0; i < 16; i++) {
-        for (b = 7; b >= 0; b--) {
-            uint8_t bit_out = (key[i] >> b) & 0x1;
-            spiSendReceive(bit_out ? 0x01 : 0x00);
-        }
-    }
+/* NOTE: Key transmission is now handled by bridge_send_all_keys() in webpage.c
+ * which sends multiple keys sequentially using bridgeSelect/Deselect
+ * and the shared spiSendReceive() function.
+ * 
+ * Protocol per key:
+ * 1. bridgeSelect() - CS low
+ * 2. Send 128 bits (16 bytes) MSB first, bit-by-bit via spiSendReceive()
+ * 3. bridgeDeselect() - CS high
+ * 4. Small inter-packet delay
+ * 5. Repeat for each block's key
+ */
 
-    //-----------------------------------------
-    // 3. Send 1-byte length MSB-first
-    //-----------------------------------------
-    for (b = 7; b >= 0; b--) {
-        uint8_t bit_out = (length >> b) & 0x1;
-        spiSendReceive(bit_out ? 0x01 : 0x00);
-    }
+///////////////////////////////////////////////////////////////////////////////
+// Optional: Bridge handshake helpers
+///////////////////////////////////////////////////////////////////////////////
 
-    //-----------------------------------------
-    // 4. End FPGA receive
-    //-----------------------------------------
-    digitalWrite(CS_IN_PIN, 1);   // CS high (end)
+/* Assert LOAD signal to FPGA 2 */
+void bridgeAssertLoad(void) {
+    digitalWrite(BRIDGE_LOAD, 1);
+}
 
-    //-----------------------------------------
-    // 5. SPI busy wait (optional, for safety)
-    //-----------------------------------------
-    while(SPI1->SR & SPI_SR_BSY);
+/* Deassert LOAD signal to FPGA 2 */
+void bridgeDeassertLoad(void) {
+    digitalWrite(BRIDGE_LOAD, 0);
+}
+
+/* Check if FPGA 2 DONE signal is high */
+int bridgeIsDone(void) {
+    return digitalRead(BRIDGE_DONE);
 }
