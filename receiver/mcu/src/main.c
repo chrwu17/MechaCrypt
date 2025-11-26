@@ -9,7 +9,7 @@
 
 
 // ----------------- Local LCD handle -----------------
-static lcd_i2c_t lcd;
+static lcd_i2c_t g_lcd;
 
 // ----------------- Simple microsecond delay using SysTick -----------------
 void delay_us(uint32_t us)
@@ -28,7 +28,29 @@ void delay_us(uint32_t us)
     SysTick->CTRL = 0;
 }
 
-
+/**
+ * @brief Demo function to test the progress bar
+ * Call this from main() to see the progress bar in action
+ */
+void demo_progress_bar(void) {
+    // Simulate receiving 16 blocks (256 bytes total)
+    set_expected_transfer_size(256);
+    lcd_update_transfer_status(&g_lcd, 0, get_total_expected_blocks());
+    
+    delay_millis(TIM15, 1000);  // Pause before starting
+    
+    // Simulate receiving blocks one by one
+    for (int i = 0; i < 16; i++) {
+        delay_millis(TIM15, 800);  // Wait 800ms between blocks
+        on_block_received(&g_lcd);  // Update progress
+    }
+    
+    // Show completion for 3 seconds
+    delay_millis(TIM15, 3000);
+    
+    // Reset for next demo cycle
+    reset_progress();
+}
 
 static void lcd_hw_init(void)
 {
@@ -36,12 +58,13 @@ static void lcd_hw_init(void)
     initI2C1();
     
     // Initialize LCD using hardware I2C write function
-    lcd_init(&lcd, 0x27, 20, 4, i2c_write_byte, delay_us);
-    lcd_begin(&lcd);
-    lcd_backlight(&lcd);
-    lcd_clear(&lcd);
-    lcd_set_cursor(&lcd, 0, 0);
-    lcd_print(&lcd, "MechaCrypt!");
+    lcd_init(&g_lcd, 0x27, 20, 4, i2c_write_byte, delay_us);
+    lcd_begin(&g_lcd);
+    lcd_backlight(&g_lcd);
+    lcd_init_progress_chars(&g_lcd);
+    lcd_clear(&g_lcd);
+    lcd_set_cursor(&g_lcd, 0, 0);
+    lcd_update_transfer_status(&g_lcd, 0, 0);
 }
 
 // ----------------- Main entry -----------------
@@ -82,6 +105,8 @@ int main(void)
     // Call LCD initialization function
     lcd_hw_init();
 
+    initMsgReceive();
+
     receiver_demo_init_plaintext();  // Sample demo plaintext data for Midpoint check in
 
     // Initialize SPI for FPGA communication
@@ -99,5 +124,12 @@ int main(void)
         processWebRequest(USART);
 
         // receiver_spi_demo_poll(); // Uncomment to enable SPI fetching
+        demo_progress_bar();
+
+        if (get_received_block_count() >= get_total_expected_blocks() && get_total_expected_blocks() > 0) {
+            // All blocks received
+            lcd_set_cursor(&g_lcd, 0, 3);
+            lcd_print(&g_lcd, "Transfer Complete!   ");
+        }
     }
 }

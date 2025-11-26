@@ -5,8 +5,8 @@
  * @brief Header file for message receiving functions and variables.
 */
 
-#ifndef MSG_RECEIVE_H
-#define MSG_RECEIVE_H
+#ifndef MSGRECEIVE_H
+#define MSGRECEIVE_H
 
 #include <stdint.h>
 #include <stm32l432xx.h>

@@ -12,6 +12,8 @@
 #include "STM32L432KC.h"
 #include "lcd_i2c.h"
 #include "webpage.h"
+#include "lcd_progress.h"
+#include "msgReceive.h"
 
 // System-level constants
 #define LED_PIN   PB3 // Debug LED

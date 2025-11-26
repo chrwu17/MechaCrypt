@@ -8,8 +8,8 @@
 
 #include <stdint.h>
 #include <stdio.h>
-#include "STM32L432KC.h"
-#include "msgReceive.h"
+#include "../lib/STM32L432KC.h"
+#include "../lib/msgReceive.h"
 
 // Variables
 volatile uint8_t receivedMessage[MSG_BYTES]; // Arraty to store received message
