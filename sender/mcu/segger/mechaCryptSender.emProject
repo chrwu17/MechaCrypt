@@ -60,6 +60,7 @@
     <folder Name="Source Files">
       <configuration Name="Common" filter="c;cpp;cxx;cc;h;s;asm;inc" />
       <folder Name="lib">
+        <file file_name="../lib/bridge.h" />
         <file file_name="../lib/lcd_i2c.h" />
         <file file_name="../lib/main.h" />
         <file file_name="../lib/STM32L432KC.h" />
@@ -73,6 +74,7 @@
         <file file_name="../lib/webpage.h" />
       </folder>
       <folder Name="src">
+        <file file_name="../src/bridgeWrite.c" />
         <file file_name="../src/main.c" />
         <file file_name="../src/STM32L432KC_FLASH.c" />
         <file file_name="../src/STM32L432KC_GPIO.c" />

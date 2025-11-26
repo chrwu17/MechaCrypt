@@ -12,6 +12,7 @@
 module aesEncryption(input  logic clk,
                      input  logic sck,
                      input  logic sdi,
+                     input  logic cs,
                      input  logic load,
                      output logic sdo,
                      output logic [127:0] cyphertext,
@@ -26,8 +27,7 @@ module aesEncryption(input  logic clk,
         load_sync <= load_meta;
     end
     
-    aes_spi spi(sck, sdi, sdo, done, key, plaintext, cyphertext);
-    
+    aes_spi spi(sck, sdi, cs, sdo, done, key, plaintext, cyphertext);
     aes_core core(clk, load_sync, key, plaintext, done, cyphertext);
 endmodule
 
@@ -40,6 +40,7 @@ endmodule
 
 module aes_spi(input  logic sck,
                input  logic sdi,
+               input  logic cs,
                output logic sdo,
                input  logic done,
                output logic [127:0] key, plaintext,
@@ -55,13 +56,17 @@ module aes_spi(input  logic sck,
     // SPI mode is equivalent to cpol = 0, cpha = 0 since data is sampled on first edge and the first
     // edge is a rising edge (clock going from low in the idle state to high).
     always_ff @(posedge sck)
-        if (!wasdone)  {cyphertextcaptured, plaintext, key} = {cyphertext, plaintext[126:0], key, sdi};
-        else           {cyphertextcaptured, plaintext, key} = {cyphertextcaptured[126:0], plaintext, key, sdi};
+        if (!cs) begin
+            if (!wasdone)  {cyphertextcaptured, plaintext, key} <= {cyphertext, plaintext[126:0], key, sdi};
+            else           {cyphertextcaptured, plaintext, key} <= {cyphertextcaptured[126:0], plaintext, key, sdi};
+        end
 
     // sdo should change on the negative edge of sck
     always_ff @(negedge sck) begin
-        wasdone = done;
-        sdodelayed = cyphertextcaptured[126];
+        if (cs) begin
+            wasdone <= done;
+            sdodelayed <= cyphertextcaptured[126];
+        end
     end
 
     // when done is first asserted, shift out msb before clock edge

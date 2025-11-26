@@ -39,10 +39,10 @@ void bridgeSelect(void);
 /* Deselect FPGA 2 by deasserting its chip select (CS high) */
 void bridgeDeselect(void);
 
-/* Send 16-byte key and 1-byte length to FPGA 2
- *    -- key: pointer to 16-byte encryption key
- *    -- length: message length byte
- * This uses the SHARED spiSendReceive() from main SPI driver */
-void bridgeSendKeyAndLength(const uint8_t *key, uint8_t length);
+void bridgeAsserLoad(void);
+
+void bridgeDeassertLoad(void);
+
+int bridgeIsDone(void);
 
 #endif // BRIDGE_H

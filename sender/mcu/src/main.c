@@ -32,6 +32,9 @@ int main(void) {
   // Configure SPI and handshake pins (LOAD/DONE)
   mechacrypt_init_io_and_spi();
 
+  // Initialize bridge CS pin
+  initBridgeCS();
+
   // Main loop:
   //  - service HTTP
   //  - poll DONE and advance queued block sends (if any)
