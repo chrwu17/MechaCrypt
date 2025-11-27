@@ -1,23 +1,25 @@
 // Josaphat Ngoga
 // jngoga@g.hmc.edu
-// 10/15/2025
+// 11/26/2025
 
 `timescale 10ns/1ns
 
 /////////////////////////////////////////////
-// testbench_shiftRows_tb
-// Tests shiftRows module for proper shifting operations.
-// Demonstration follows examples from FIPS-197 appendix A.1
+// testbench_getNextKeyEIC_tb
+// Tests the key expansion functionality across all RCON rounds
+// as well as along the full datapath.
+//
+// Behavior is identical to getNextKey for AES encryption.
 /////////////////////////////////////////////
 
-module getNextKey_tb();
+module getNextKeyEIC_tb();
     logic clk;
     logic [31:0] rcon;
     logic [3:0][31:0] currKey, nextKey, nextKeyExpected;
     logic pass = 1'b1; // indicates if test passed
 
     // device under test
-    getNextKey dut(clk, currKey, rcon, nextKey);
+    getNextKeyEIC dut(clk, currKey, rcon, nextKey);
 
     // generate clock and load signals
     always begin

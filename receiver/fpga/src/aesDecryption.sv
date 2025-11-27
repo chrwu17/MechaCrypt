@@ -79,7 +79,7 @@ endmodule
 //   Decryption follows Equivalent Inverse Cipher algorithm, mimicing encryption datapath
 //   for easier hardware reuse and debugging
 //   
-//   Round keys are generated at the start of decryption and stored since deccryption starts with K10
+//   Round keys are generated at the start of decryption and stored since decryption starts with K10
 //   and works backwards to K0. 
 //   Key schedule is run for all 10 rounds to generate K1..K10, and K0 is the original key.
 //   EqInv requires pre-mixing round keys 1..9 by applying InvMixColumns while keeping K0 and K10 unchanged.
@@ -100,13 +100,14 @@ module aes_core(
     logic [31:0] rcon;
     logic [3:0] ka_round, round_idx, roundCount, cycleCount;
     logic [127:0] state; // Holds intermediate state of the data
-    logic [127:0] bfrSub, afterSub, afterShift, afterMix, bfrAdd, afterAdd, keyPreMix, keyAfterMix;
+    logic [127:0] bfrSub, afterSub, afterShift, afterMix, bfrAdd, afterAdd;
+    logic [127:0] keyPreMix, keyAfterMix; // For key mixing
 
-    // Inverse Data path signals and setup
+    // Equivalent Inverse Cipher Data path signals and setup
     inv_subBytes sub(clk, bfrSub, afterSub);
     inv_shiftRows shift(afterSub, afterShift);
     inv_mixcolumns mix(afterShift, afterMix);
-    addRoundKey add(bfrAdd, {word[3], word[2], word[1], word[0]}, afterAdd);
+    addRoundKey add(bfrAdd, word, afterAdd);
 
     getNextKeyEIC keyExp(clk, currKey, rcon, nextKey);
 
@@ -127,7 +128,7 @@ module aes_core(
             roundKeys[0] <= {key[127:96], key[95:64], key[63:32], key[31:0]}; // Key for round 0
             currKey <= {key[127:96], key[95:64], key[63:32], key[31:0]};
 
-            // Initial input cyphertext
+            // Initial input cyphertext and round
             bfrAdd <= cyphertext;
 
             // start key schedule advance to build K1..K10 (+ premix K1..K9)
@@ -150,7 +151,7 @@ module aes_core(
                 end
             end
 
-            // After advancing till K10
+            // After advancing till K10, terminate key expansion
             if ((ka_round == 9) && (cycleCount == 0)) begin
                 ka_busy <= 0;
                 ka_done <= 1;
@@ -326,9 +327,9 @@ endmodule
 
 /////////////////////////////////////////////                  
 // Extended Galois Field Multiplication
-//   Provides GF(2^8) multiplication helpers for AES inverse MixColumns coefficients
-//   performs polynomial multiplication by x^i for i in {1,2,3} via xtime
-//   then combines to get {09, 0B, 0D, 0E} multiplications as shown below:
+//   GF(2^8) multiplication helper functions for AES inverse MixColumns coefficients.
+//   They perform polynomial multiplication by x^i for i in {1,2,3} via xtime
+//   then combine to get {09, 0B, 0D, 0E} multiplications as shown below:
 //        0x09 = x^3 + 1
 //        0x0B = x^3 + x + 1
 //        0x0D = x^3 + x^2 + 1
@@ -446,6 +447,8 @@ endmodule
 
 /////////////////////////////////////////////
 // getNextKeyEIC
+//   Mimics getNextKey for AES encryption
+//
 //   Key expansion portion of AES algorithm
 //   Takes previous key and rcon
 //   rotates the previous key and applies sbox to each byte
@@ -461,20 +464,20 @@ module getNextKeyEIC(input  logic clk,
                     
     logic [31:0] t;
     logic [7:0]  t0, t1, t2, t3, s0, s1, s2, s3;
-    
+
     // rotate left by 8 bits
     assign {t0, t1, t2, t3} = currKey[0];
-    assign t = {t1, t2, t3, t0};
-    
+    assign t = {t1, t2, t3, t0}; // rotated word
+
     // apply sbox to each byte of t
     sbox_sync sb0(t[31:24], clk, s0);
     sbox_sync sb1(t[23:16], clk, s1);
     sbox_sync sb2(t[15:8], clk, s2);
     sbox_sync sb3(t[7:0], clk, s3);
-    
-    // generate next words
-    assign nextKey[0] = currKey[0] ^ ({s0, s1, s2, s3} ^ rcon);
-    assign nextKey[1] = currKey[1] ^ nextKey[0];
-    assign nextKey[2] = currKey[2] ^ nextKey[1];
-    assign nextKey[3] = currKey[3] ^ nextKey[2];
+
+    // generate next key
+    assign nextKey[3] = currKey[3] ^ ({s0, s1, s2, s3} ^ rcon);
+    assign nextKey[2] = currKey[2] ^ nextKey[3];
+    assign nextKey[1] = currKey[1] ^ nextKey[2];
+    assign nextKey[0] = currKey[0] ^ nextKey[1];
 endmodule
