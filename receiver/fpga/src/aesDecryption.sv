@@ -8,7 +8,7 @@
 /////////////////////////////////////////////
 
 module aesDecryption(
-           input  logic clk,
+           input  logic clk,  // For simulation, replace with internal oscillator in FPGA
            input  logic sck, 
            input  logic sdi,
            input  logic load,
@@ -35,15 +35,15 @@ endmodule
 
 /////////////////////////////////////////////
 // aes_spi
-//   SPI interface.  Shifts in key and plaintext
-//   Captures ciphertext when done, then shifts it out
+//   SPI interface.  Shifts in key and cyphertext,
+//   Captures plaintext when done, then shifts it out
 //   Tricky cases to properly change sdo on negedge clk
 /////////////////////////////////////////////
 
 module aes_spi(input  logic sck, 
                input  logic sdi,
                output logic sdo,
-               input  logic done,
+               input  logic done_decrypt,
                output logic [127:0] key, cyphertext,
                input  logic [127:0] plaintext);
 
@@ -62,12 +62,12 @@ module aes_spi(input  logic sck,
     
     // sdo should change on the negative edge of sck
     always_ff @(negedge sck) begin
-        wasdone = done;
+        wasdone = done_decrypt;
         sdodelayed = plaintextcaptured[126];
     end
     
-    // when done is first asserted, shift out msb before clock edge
-    assign sdo = (done & !wasdone) ? plaintext[127] : sdodelayed;
+    // when done_decrypt is first asserted, shift out msb before clock edge
+    assign sdo = (done_decrypt & !wasdone) ? plaintext[127] : sdodelayed;
 endmodule
 
 
@@ -242,6 +242,24 @@ module aes_core(
 endmodule
 
 ///////////////////////// AES Decryption Primitives for Equivalent Inverse Cipher //////////////////////////////
+
+/////////////////////////////////////////////
+// sbox
+//   Infamous AES byte substitutions with magic numbers
+//   Combinational version which is mapped to LUTs (logic cells)
+//   Section 5.1.1, Figure 7
+/////////////////////////////////////////////
+
+module sbox(input  logic [7:0] a,
+            output logic [7:0] y);
+
+    // sbox implemented as a ROM
+    // This module is combinational and will be inferred using LUTs (logic cells)
+    logic [7:0] sbox[0:255];
+
+    initial   $readmemh("D:/MicroPs/MechaCrypt/receiver/fpga/src/sbox.txt", sbox);
+    assign y = sbox[a];
+endmodule
 
 /////////////////////////////////////////////
 // sbox
@@ -470,11 +488,11 @@ module getNextKeyEIC(input  logic clk,
     assign t = {t1, t2, t3, t0}; // rotated word
 
     // apply sbox to each byte of t
-    sbox_sync sb0(t[31:24], clk, s0);
-    sbox_sync sb1(t[23:16], clk, s1);
-    sbox_sync sb2(t[15:8], clk, s2);
-    sbox_sync sb3(t[7:0], clk, s3);
-
+    sbox sb0(t[31:24], s0);
+    sbox sb1(t[23:16], s1);
+    sbox sb2(t[15:8],  s2);
+    sbox sb3(t[7:0],   s3);
+    
     // generate next key
     assign nextKey[3] = currKey[3] ^ ({s0, s1, s2, s3} ^ rcon);
     assign nextKey[2] = currKey[2] ^ nextKey[3];

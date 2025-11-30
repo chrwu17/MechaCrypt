@@ -21,7 +21,7 @@ module testbench_aes_spi();
 
 
     // device under test
-    aes dut(clk, sck, sdi, sdo, load, done);
+    aesEncryption dut(clk, sck, sdi, sdo, load, done);
 
     // Create dumpfile
     initial begin
