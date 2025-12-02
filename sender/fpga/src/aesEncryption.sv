@@ -12,7 +12,7 @@
 module aesEncryption(input  logic clk,
                      input  logic sck,
                      input  logic sdi,
-                     input  logic cs,
+                     input  logic cs,  // Idle LOW chip select
                      input  logic load,
 					// output logic led_test,
                      output logic sdo,

@@ -12,14 +12,14 @@ module spramRead (
     input  logic         clk,
     input  logic         write_done,
     input  logic [13:0]  baseAddr,   
-    input  logic         send_done,    // NEW: feedback from msgSend
+    input  logic         send_done,    // Feedback from msgSend
     output logic [127:0] cipher_out,
     output logic         read_done);
 
     // Internal signals
     logic [15:0] data_word;
     logic [13:0] addr;
-    logic [3:0]  idx;  // Changed to 4 bits to handle 0-8 range
+    logic [3:0]  idx;
     
     // Edge detection for write_done
     logic write_done_prev;
