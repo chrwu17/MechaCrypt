@@ -14,6 +14,7 @@ module aesEncryption(input  logic clk,
                      input  logic sdi,
                      input  logic cs,
                      input  logic load,
+					// output logic led_test,
                      output logic sdo,
                      output logic [127:0] cyphertext,
                      output logic done);
@@ -28,7 +29,11 @@ module aesEncryption(input  logic clk,
     end
     
     aes_spi spi(sck, sdi, cs, sdo, done, key, plaintext, cyphertext);
+
     aes_core core(clk, load_sync, key, plaintext, done, cyphertext);
+	
+    // assign led_test = load_sync;
+
 endmodule
 
 /////////////////////////////////////////////
@@ -55,11 +60,12 @@ module aes_spi(input  logic sck,
     // then apply 128 sclks to shift out cyphertext, starting with cyphertext[127]
     // SPI mode is equivalent to cpol = 0, cpha = 0 since data is sampled on first edge and the first
     // edge is a rising edge (clock going from low in the idle state to high).
-    always_ff @(posedge sck)
+    always_ff @(posedge sck) begin
         if (!cs) begin
             if (!wasdone)  {cyphertextcaptured, plaintext, key} <= {cyphertext, plaintext[126:0], key, sdi};
             else           {cyphertextcaptured, plaintext, key} <= {cyphertextcaptured[126:0], plaintext, key, sdi};
         end
+    end
 
     // sdo should change on the negative edge of sck
     always_ff @(negedge sck) begin

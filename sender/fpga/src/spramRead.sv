@@ -9,44 +9,65 @@
 ////////////////////////////////////////////////////////////
 
 module spramRead (
-    input  logic        clk,
-    input  logic        write_done,
-    input  logic [13:0] baseAddr,   
+    input  logic         clk,
+    input  logic         write_done,
+    input  logic [13:0]  baseAddr,   
+    input  logic         send_done,    // NEW: feedback from msgSend
     output logic [127:0] cipher_out,
-    output logic        read_done);
+    output logic         read_done);
 
     // Internal signals
     logic [15:0] data_word;
     logic [13:0] addr;
-    logic [2:0]  idx;
+    logic [3:0]  idx;  // Changed to 4 bits to handle 0-8 range
+    
+    // Edge detection for write_done
+    logic write_done_prev;
+    logic write_done_pulse;
+    
+    always_ff @(posedge clk) begin
+        write_done_prev <= write_done;
+    end
+    
+    assign write_done_pulse = write_done && !write_done_prev;
 
     // FSM to control SPRAM reads
-    typedef enum logic [1:0] {IDLE, READ, DONE} statetype;
+    typedef enum logic [1:0] {IDLE, READ, WAIT_SEND} statetype;
     statetype state;
 
     always_ff @(posedge clk) begin
-            case (state)
-                IDLE: if (write_done) begin
-                    addr       <= baseAddr;
-                    idx        <= 0;
-                    state      <= READ;
+        case (state)
+            IDLE: begin
+                read_done <= 0;
+                if (write_done_pulse) begin
+                    addr  <= baseAddr;
+                    idx   <= 0;
+                    state <= READ;
                 end
+            end
 
-                READ: begin
+            READ: begin
+                if (idx < 8) begin
                     cipher_out[idx*16 +: 16] <= data_word; // reconstruct ciphertext
-                    addr       <= addr + 1;
-                    idx        <= idx + 1;
-                    
-                    if (idx == 3'd7) begin
-                        state <= DONE;
-                    end
+                    addr <= addr + 1;
+                    idx  <= idx + 1;
                 end
+                
+                if (idx == 8) begin
+                    read_done <= 1;  // Pulse read_done for one cycle
+                    state     <= WAIT_SEND;
+                end
+            end
 
-                DONE: begin
-                    read_done <= 1;
-                    state     <= IDLE;
+            WAIT_SEND: begin
+                read_done <= 0;  // Clear pulse
+                if (send_done) begin
+                    state <= IDLE;  // Wait for next encryption
                 end
-            endcase
+            end
+            
+            default: state <= IDLE;
+        endcase
     end
 
     // SPRAM read logic
@@ -63,4 +84,3 @@ module spramRead (
         .DO       (data_word));
 
 endmodule
-

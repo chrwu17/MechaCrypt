@@ -13,29 +13,20 @@ module sender (
     input logic sdi,            // SPI data in
     input logic cs,             // Chip select
     input logic load,           // Load signal to start encryption
+	// output logic led_test,
     output logic sdo,           // SPI data out
     output logic [7:0] msg_out, // 8-bit message output
     output logic tx_clk,         // Transfer clock output
-    output logic send_done     // Sending done signal
+    output logic send_done,     // Sending done signal
+    output logic done
 );  
     
      // Internal high-speed oscillator
-    logic clk_fast;
-    HSOSC hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk_fast)); // 48 MHz
-
-    logic [1:0] clk_div;
-    always_ff @(posedge clk_fast or posedge reset) begin
-        if (reset) begin
-            clk_div <= 2'b00;
-        end else begin
-            clk_div <= clk_div + 2'b01;
-        end
-    end
-
-    wire clk = clk_div[1];  // 48 MHz / 4 = 12 MHz
+    logic clk;
+    HSOSC #(.CLKHF_DIV(2'b01)) hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
 
     // AES Encryption Module
-    logic done;
+    // logic done;
     logic [127:0] ciphertext;
 
     aesEncryption encrypt (
@@ -44,6 +35,7 @@ module sender (
         .sdi        (sdi),
         .cs         (cs),
         .load       (load),
+		// .led_test (led_test),
         .sdo        (sdo),
         .cyphertext (ciphertext),
         .done       (done)
@@ -70,6 +62,7 @@ module sender (
         .write_done (write_done),
         .baseAddr   (baseAddr),
         .cipher_out (cipher_out),
+        .send_done (send_done),
         .read_done  (read_done)
     );
 

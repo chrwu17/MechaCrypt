@@ -10,83 +10,137 @@
 ////////////////////////////////////////////////////////////
 
 module msgSend #(
-    parameter CLK_FREQ = 48_000_000,  // system clock frequency (Set to 48MHz based on HSOSC)
-    parameter TX_FREQ  = 3            // Manually choose send frequency (Hz)
-    )(
+    parameter CLK_FREQ = 48_000_000,  // System clock frequency
+    parameter TX_FREQ  = 3             // Output transfer clock frequency (Hz)
+)(
     input  logic         clk,
     input  logic         reset,
-    input  logic         start,       // signal to start sending message
-    input  logic [127:0] msg_in,      // 128-bit input message to send
-    output logic [7:0]   msg_out,     // 8-bit output message (one byte at a time)
-    output logic         tx_clk,      // transfer clock output
-    output logic         send_done);  // signal indicating message has been fully sent  
+    input  logic         start,       // Begin sending message
+    input  logic [127:0] msg_in,      // 128-bit input message
+    output logic [7:0]   msg_out,     // Current output byte
+    output logic         tx_clk,      // Transfer clock output
+    output logic         send_done    // High after the 16-byte sequence is complete
+);
 
-    // Generate tx_clk based on CLK_FREQ and TX_FREQ
-    localparam integer DIV_COUNT = CLK_FREQ / (2 * TX_FREQ); 
+    //===========================================
+    // CLOCK DIVIDER (Generates tx_clk_internal)
+    //===========================================
+
+    localparam integer DIV_COUNT = CLK_FREQ / (2 * TX_FREQ);
+
     logic [31:0] counter;
-    logic tx_clk_en;
+    logic tx_clk_internal, tx_clk_prev;
+    logic tx_clk_posedge;
 
+    logic sending;
+    logic [4:0] idx;      // 0–15 valid for byte selection
+    logic last_byte_sent; // Flag to track when last byte has been clocked out
+
+    // Active whenever data is being clocked out
+    logic active;
+    assign active = sending;
+
+    // Clock generator runs ONLY when active
     always_ff @(posedge clk or negedge reset) begin
         if (!reset) begin
-            counter   <= 0;
-            tx_clk    <= 0;
-            tx_clk_en <= 0;
-        end else if (counter == DIV_COUNT - 1) begin
-            counter   <= 0;
-            tx_clk    <= ~tx_clk;  // transfer clock toggle
-            tx_clk_en <= 1;    // one-cycle pulse for transfer
+            counter         <= 0;
+            tx_clk_internal <= 0;
+            tx_clk_prev     <= 0;
         end else begin
-            counter   <= counter + 1;
-            tx_clk_en <= 0;
-        end
-    end
+            tx_clk_prev <= tx_clk_internal;
 
-    // Byte sending control logic
-    logic [3:0] idx; // Byte index in msg_in (0 to 15)
-    logic sending;  
-
-    always_ff @(posedge clk or negedge reset) begin
-        if (!reset) begin
-            idx        <= 0;
-            sending    <= 0;
-            send_done  <= 0;
-        end else if (start && !sending) begin
-            sending    <= 1;
-            idx        <= 0;
-            send_done  <= 0;
-        end else if (sending && tx_clk_en) begin
-            // advance on each tx_clk rising edge
-            if (idx == 15) begin
-                idx        <= 0;
-                sending    <= 0;
-                send_done  <= 1;
+            if (active) begin
+                if (counter == DIV_COUNT - 1) begin
+                    counter         <= 0;
+                    tx_clk_internal <= ~tx_clk_internal;
+                end else begin
+                    counter <= counter + 1;
+                end
             end else begin
-                idx <= idx + 1;
+                counter         <= 0;
+                tx_clk_internal <= 0;   // freeze clock low when not active
             end
         end
     end
 
-    // Iteratively select the appropriate byte from msg_in
+    // Rising edge of tx_clk_internal
+    assign tx_clk_posedge = tx_clk_internal && !tx_clk_prev;
+
+    // Output tx_clk only when sending AND during high phase
+    assign tx_clk = (active && tx_clk_internal) ? 1'b1 : 1'b0;
+
+
+    //=========================
+    // SEND STATE MACHINE
+    //=========================
+
+    always_ff @(posedge clk or negedge reset) begin
+        if (!reset) begin
+            sending        <= 0;
+            idx            <= 0;
+            send_done      <= 0;
+            last_byte_sent <= 0;
+
+        end else if (start && !sending && !send_done) begin
+            // Start new send (only if not already done)
+            sending        <= 1;
+            idx            <= 0;
+            send_done      <= 0;
+            last_byte_sent <= 0;
+
+        end else if (sending) begin
+            if (tx_clk_posedge) begin
+                if (last_byte_sent) begin
+                    // Last byte has been clocked out, stop now
+                    sending        <= 0;
+                    idx            <= 0;
+                    send_done      <= 1;
+                    last_byte_sent <= 0;
+                end else if (idx == 15) begin
+                    // This is the 16th byte - mark it but keep idx at 15
+                    last_byte_sent <= 1;
+                end else begin
+                    // Normal byte increment
+                    idx <= idx + 1;
+                end
+            end
+
+        end else if (!start && send_done) begin
+            // Clear send_done when start goes low
+            send_done <= 0;
+        end
+    end
+
+
+    //=========================
+    // BYTE SELECTION LOGIC
+    //=========================
+
+    logic [7:0] msg_byte;
+
     always_comb begin
         case (idx)
-            4'd0:  msg_out = msg_in[127:120];
-            4'd1:  msg_out = msg_in[119:112];
-            4'd2:  msg_out = msg_in[111:104];
-            4'd3:  msg_out = msg_in[103:96];
-            4'd4:  msg_out = msg_in[95:88];
-            4'd5:  msg_out = msg_in[87:80];
-            4'd6:  msg_out = msg_in[79:72];
-            4'd7:  msg_out = msg_in[71:64];
-            4'd8:  msg_out = msg_in[63:56];
-            4'd9:  msg_out = msg_in[55:48];
-            4'd10: msg_out = msg_in[47:40];
-            4'd11: msg_out = msg_in[39:32];
-            4'd12: msg_out = msg_in[31:24];
-            4'd13: msg_out = msg_in[23:16];
-            4'd14: msg_out = msg_in[15:8];
-            4'd15: msg_out = msg_in[7:0];
-
-            default: msg_out = 8'h00;
+            5'd0:  msg_byte = msg_in[127:120];
+            5'd1:  msg_byte = msg_in[119:112];
+            5'd2:  msg_byte = msg_in[111:104];
+            5'd3:  msg_byte = msg_in[103:96];
+            5'd4:  msg_byte = msg_in[95:88];
+            5'd5:  msg_byte = msg_in[87:80];
+            5'd6:  msg_byte = msg_in[79:72];
+            5'd7:  msg_byte = msg_in[71:64];
+            5'd8:  msg_byte = msg_in[63:56];
+            5'd9:  msg_byte = msg_in[55:48];
+            5'd10: msg_byte = msg_in[47:40];
+            5'd11: msg_byte = msg_in[39:32];
+            5'd12: msg_byte = msg_in[31:24];
+            5'd13: msg_byte = msg_in[23:16];
+            5'd14: msg_byte = msg_in[15:8];
+            5'd15: msg_byte = msg_in[7:0];
+            default: msg_byte = 8'h00;
         endcase
     end
+
+    // Only output a byte when tx_clk is high AND sending
+    assign msg_out = (sending && tx_clk_internal) ? msg_byte : 8'h00;
+
 endmodule
