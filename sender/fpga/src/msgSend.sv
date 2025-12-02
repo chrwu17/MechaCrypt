@@ -10,7 +10,7 @@
 ////////////////////////////////////////////////////////////
 
 module msgSend #(
-    parameter CLK_FREQ = 48_000_000,  // System clock frequency
+    parameter CLK_FREQ = 24_000_000,  // System clock frequency
     parameter TX_FREQ  = 3             // Output transfer clock frequency (Hz)
 )(
     input  logic         clk,
@@ -81,7 +81,7 @@ module msgSend #(
             send_done      <= 0;
             last_byte_sent <= 0;
 
-        end else if (start && !sending && !send_done) begin
+        end else if (start && !sending) begin
             // Start new send (only if not already done)
             sending        <= 1;
             idx            <= 0;

@@ -261,21 +261,10 @@ void mechacrypt_init_io_and_spi(void) {
 
 // ----------------- Public: main-loop poll -----------------
 void mechacrypt_poll_and_advance(void) {
-  // State machine to handle both encryption done and send_done signals
-  
   if (tx_state == TX_ENCRYPTING) {
-    // Waiting for encryption to complete
+    // Wait for send_done rising edge (encryption + transmission complete)
     if (detect_done_rising_edge()) {
-      // First rising edge: encryption done, SPRAM write starting
-      delay_millis(TIM15, 2);  // Small delay for SPRAM operations
-      tx_state = TX_SENDING;   // Now wait for message transmission
-    }
-  }
-  else if (tx_state == TX_SENDING) {
-    // Waiting for message transmission to complete
-    if (detect_done_rising_edge()) {
-      // Second rising edge: message transmission done
-      delay_millis(TIM15, 1);
+      delay_millis(TIM15, 5);  // Small delay for stability
       
       // Move to next block
       tx_state = TX_IDLE;
