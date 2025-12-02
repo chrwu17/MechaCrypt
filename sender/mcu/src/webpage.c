@@ -1,6 +1,3 @@
-// Modified sender MCU webpage.c for just-in-time key transmission
-// Each block: send key to receiver FPGA → encrypt → mechanical transfer
-
 #include "../lib/main.h"
 #include "../lib/bridge.h"
 #include <string.h>
@@ -17,22 +14,21 @@ volatile int debug_last_block_idx = -1;
 volatile int debug_last_got_bytes = 0;
 volatile int debug_last_trng_result = -99;
 
-// Message metadata
+// Bridge state tracking
 volatile uint8_t message_length = 0;
+volatile int bridge_keys_sent = 0;
 
-// ------------ Transmit state machine ------------
+// ------------ Transmit state machine (SPI + LOAD/DONE) ------------
 typedef enum {
   TX_IDLE = 0,
-  TX_SEND_KEY_TO_BRIDGE,   // NEW: Send key to receiver FPGA
-  TX_SEND_PT_TO_SENDER,    // Send plaintext+key to sender FPGA
-  TX_WAIT_DONE             // Wait for encryption done
+  TX_WAIT_DONE
 } tx_state_t;
 
 static volatile tx_state_t tx_state = TX_IDLE;
 static volatile int current_idx = -1;
 static volatile int next_idx = 0;
 
-// LED debug functions
+// LED debug
 static void led_blink_short(void) {
   digitalWrite(LED_PIN, 1);
   delay_millis(TIM15, 150);
@@ -60,7 +56,7 @@ static const char http_header_ok[] =
 static const char http_header_no_content[] =
 "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n";
 
-// ----------------- HTML page (same as before) -----------------
+// ----------------- Static HTML/JS page -----------------
 const char webpage[] =
 "<!DOCTYPE html><html lang=\"en\"><head>"
 "<meta charset=\"utf-8\"/>"
@@ -125,7 +121,7 @@ const char webpage[] =
 "})();</script>"
 "</body></html>";
 
-// ----------------- Helper functions -----------------
+// ----------------- Helpers -----------------
 static inline int line_has_lf(const char *buf) { 
   return strchr(buf, '\n') != NULL; 
 }
@@ -158,16 +154,27 @@ static int decode_hex_list(const char *hex, uint8_t *buf, int maxlen) {
   return count;
 }
 
-// ----------------- Bit-banged SPI functions -----------------
+// ----------------- BIT-BANGING SPI CORE -----------------
+
+/* Send a single bit via bit-banged SPI
+ * Manually toggles SCK and MOSI to send one bit per clock cycle
+ * This matches the FPGA's expectation of bit-serial data
+ */
 static inline void spi_send_bit(uint8_t bit) {
-    digitalWrite(SPI_COPI, bit & 1);
+    digitalWrite(SPI_COPI, bit & 1);   // Set MOSI to bit value
+    // Small delay for setup time (optional, tune if needed)
     for (volatile int i = 0; i < 4; i++) { __NOP(); }
-    digitalWrite(SPI_SCK, 1);
+    
+    digitalWrite(SPI_SCK, 1);          // Clock high
+    // Hold time
     for (volatile int i = 0; i < 4; i++) { __NOP(); }
-    digitalWrite(SPI_SCK, 0);
+    
+    digitalWrite(SPI_SCK, 0);          // Clock low
+    // Inter-bit delay
     for (volatile int i = 0; i < 4; i++) { __NOP(); }
 }
 
+/* Send 128-bit value MSB first, one bit at a time */
 static void spi_send_128bits(const uint8_t *data) {
     for (int byte_idx = 0; byte_idx < 16; byte_idx++) {
         for (int bit_idx = 7; bit_idx >= 0; bit_idx--) {
@@ -177,39 +184,23 @@ static void spi_send_128bits(const uint8_t *data) {
     }
 }
 
-// Send plaintext + key to sender FPGA (FPGA 1)
+/* Send plaintext + key pair to FPGA 1 using bit-banging */
 static void spi_send_pair_blocking(const uint8_t *pt16, const uint8_t *key16) {
+    // Protocol: LOAD high, CS low, send data bit-by-bit, CS high, LOAD low
     digitalWrite(LOAD_PIN, 1);
     digitalWrite(SPI_CE, 0);
     
-    spi_send_128bits(pt16);   // Send plaintext
-    spi_send_128bits(key16);  // Send key
+    // Send 128-bit plaintext MSB first
+    spi_send_128bits(pt16);
+    
+    // Send 128-bit key MSB first
+    spi_send_128bits(key16);
     
     digitalWrite(SPI_CE, 1);
     digitalWrite(LOAD_PIN, 0);
 }
 
-// Send key + message_length to receiver FPGA (FPGA 2) via bridge
-static void bridge_send_key_and_length(const uint8_t *key16, uint8_t msg_len) {
-    bridgeSelect();  // CS low
-    delay_millis(TIM15, 1);
-    
-    // Send message length (8 bits MSB first)
-    for (int b = 7; b >= 0; b--) {
-        uint8_t bit = (msg_len >> b) & 1;
-        spi_send_bit(bit);
-    }
-    
-    // Send 128-bit key MSB first
-    spi_send_128bits(key16);
-    
-    bridgeDeselect();  // CS high
-    delay_millis(TIM15, 2);  // Small settling time
-    
-    led_blink_bridge();
-}
-
-// ----------------- Handshake helpers -----------------
+// ----------------- SPI + handshake core -----------------
 static inline int done_is_high(void) {
   return (digitalRead(DONE_PIN) != 0);
 }
@@ -218,8 +209,11 @@ static void start_send_if_valid(int i) {
   if (i < 0 || i >= (int)total_blocks) return;
   if (!have_block[i]) return;
 
+  spi_send_pair_blocking((const uint8_t*)plaintext_blocks[i], (const uint8_t*)keys[i]);
   current_idx = i;
-  tx_state = TX_SEND_KEY_TO_BRIDGE;  // Start pipeline with key send
+  next_idx = i + 1;
+  tx_state = TX_WAIT_DONE;
+  led_blink_short();
 }
 
 static void try_send_next_ready(void) {
@@ -238,55 +232,84 @@ void mechacrypt_init_io_and_spi(void) {
   pinMode(LOAD_PIN, GPIO_OUTPUT);  digitalWrite(LOAD_PIN, 0);
   pinMode(DONE_PIN, GPIO_INPUT);  
 
-  pinMode(SPI_SCK, GPIO_OUTPUT);   digitalWrite(SPI_SCK, 0);
-  pinMode(SPI_COPI, GPIO_OUTPUT);  digitalWrite(SPI_COPI, 0);
-  pinMode(SPI_CE, GPIO_OUTPUT);    digitalWrite(SPI_CE, 1);
+  // Configure SPI pins as GPIO for bit-banging
+  pinMode(SPI_SCK, GPIO_OUTPUT);   digitalWrite(SPI_SCK, 0);   // SCK idle low
+  pinMode(SPI_COPI, GPIO_OUTPUT);  digitalWrite(SPI_COPI, 0);  // MOSI idle low
+  pinMode(SPI_CE, GPIO_OUTPUT);    digitalWrite(SPI_CE, 1);    // CS idle high
   
-  GPIOB->OSPEEDR |= GPIO_OSPEEDR_OSPEED3;  // Fast SCK
+  // Set SCK to high speed
+  GPIOB->OSPEEDR |= GPIO_OSPEEDR_OSPEED3;  // PB3 = SCK
   
+  // Clear state
   tx_state = TX_IDLE;
   current_idx = -1;
   next_idx = 0;
+  bridge_keys_sent = 0;
 }
 
 // ----------------- Public: main-loop poll -----------------
 void mechacrypt_poll_and_advance(void) {
-  switch (tx_state) {
-    case TX_SEND_KEY_TO_BRIDGE:
-      // Step 1: Send key to receiver FPGA via bridge
-      bridge_send_key_and_length((const uint8_t*)keys[current_idx], message_length);
-      tx_state = TX_SEND_PT_TO_SENDER;
-      break;
-      
-    case TX_SEND_PT_TO_SENDER:
-      // Step 2: Send plaintext+key to sender FPGA for encryption
-      spi_send_pair_blocking((const uint8_t*)plaintext_blocks[current_idx], 
-                             (const uint8_t*)keys[current_idx]);
-      tx_state = TX_WAIT_DONE;
-      led_blink_short();
-      break;
-      
-    case TX_WAIT_DONE:
-      // Step 3: Wait for encryption done, then advance to next block
+  if (tx_state == TX_WAIT_DONE) {
+    if (done_is_high()) {
+      delay_millis(TIM15, 1);
       if (done_is_high()) {
-        delay_millis(TIM15, 1);
-        if (done_is_high()) {
-          next_idx = current_idx + 1;
-          tx_state = TX_IDLE;
-          try_send_next_ready();
-        }
+        tx_state = TX_IDLE;
+        try_send_next_ready();
       }
-      break;
-      
-    case TX_IDLE:
-    default:
-      // Nothing to do
-      break;
+    }
   }
 }
 
 void mechacrypt_maybe_start_after_block(int block_idx) {
-  // Not used - we start via /start command
+  // Not used anymore - we start explicitly via /start command
+}
+
+// ----------------- Bridge: Send all keys to FPGA 2 -----------------
+static int bridge_send_all_keys(uint8_t num_blocks, uint8_t orig_length) {
+  // Send header: original message length + number of blocks
+  bridgeSelect();
+  delay_millis(TIM15, 1);
+  
+  // Send message length (8 bits)
+  for (int b = 7; b >= 0; b--) {
+    uint8_t bit = (orig_length >> b) & 1;
+    spi_send_bit(bit);
+  }
+  
+  // Send number of blocks (8 bits)
+  for (int b = 7; b >= 0; b--) {
+    uint8_t bit = (num_blocks >> b) & 1;
+    spi_send_bit(bit);
+  }
+  
+  bridgeDeselect();
+  delay_millis(TIM15, 5);
+  
+  // Send all keys, one at a time
+  for (int block = 0; block < num_blocks; block++) {
+    if (!have_block[block]) {
+      led_error_blink();
+      return -1;
+    }
+    
+    bridgeSelect();
+    delay_millis(TIM15, 1);
+    
+    // Send 128-bit key for this block, MSB first, bit-by-bit
+    spi_send_128bits((const uint8_t*)keys[block]);
+    
+    bridgeDeselect();
+    delay_millis(TIM15, 5);
+    
+    // Brief LED flash every 4 keys
+    if ((block % 4) == 0) {
+      digitalWrite(LED_PIN, 1);
+      delay_millis(TIM15, 50);
+      digitalWrite(LED_PIN, 0);
+    }
+  }
+  
+  return 0;
 }
 
 // ----------------- Request handler -----------------
@@ -376,10 +399,24 @@ void processWebRequest(USART_TypeDef *USART)
       message_length = orig_len;
     }
 
-    // Start the pipeline with block 0
     if (total_blocks > 0 && have_block[0]) {
-      if (tx_state == TX_IDLE) {
-        start_send_if_valid(0);
+      // STEP 1: Send ALL keys to FPGA 2 via bridge
+      led_blink_bridge();
+      
+      int bridge_result = bridge_send_all_keys((uint8_t)total_blocks, orig_len);
+      
+      if (bridge_result == 0) {
+        bridge_keys_sent = 1;
+        led_blink_bridge();
+        
+        delay_millis(TIM15, 10);
+        
+        // STEP 2: Start SPI transmission to FPGA 1 (encryption)
+        if (tx_state == TX_IDLE) {
+          start_send_if_valid(0);
+        }
+      } else {
+        led_error_blink();
       }
     } else {
       led_error_blink();
