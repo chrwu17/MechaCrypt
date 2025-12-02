@@ -17,79 +17,51 @@
 ////////////////////////////////////////////////////////////
 
 module bridge (
-    input  logic sck_in,   // MCU1 SPI clk
-    input  logic sdi,      // MCU1 MOSI
-    input  logic cs_in,    // MCU1 CS
+    input  logic sck_in,   // Sender MCU SPI clock
+    input  logic sdi,      // Sender MCU MOSI
+    input  logic cs_in,    // Sender MCU CS (active low)
 
-    input  logic sck_out,  // MCU2 SPI clk
-    input  logic cs_out,   // MCU2 CS
-    output logic sdo,      // MCU2 MISO
-
-    output logic ready     // Trigger to start sending to MCU2
+    output logic [127:0] decryption_key,  // Current key for AES decryption
+    output logic [7:0]   msg_length,      // Total message length (for receiver MCU display)
+    output logic         key_ready        // Pulses high when new key is loaded
 );
 
-    // Internal signals
-    logic [127:0] decryptionKey;
-    logic [7:0]   msgLength;
-    logic [135:0] shiftOut;      // 128+8 = 136 bits to be sent to MCU 2
-    logic [7:0]   bitCount;      // counts received bits
+    // Shift register to receive data
+    logic [135:0] shift_reg;  // 8 bits msg_length + 128 bits key = 136 bits
+    logic [7:0]   bit_count;
+    logic         receiving;
     
-    logic         sending;       // 0 = receiving, 1 = sending
-    logic         sdo_next;
-
-    // Initial signals
     initial begin
-        sending  = 1'b0;
-        bitCount = 8'd0;
+        decryption_key = 128'h0;
+        msg_length = 8'h0;
+        key_ready = 1'b0;
+        bit_count = 8'd0;
+        receiving = 1'b0;
     end
     
-    // Receivinng logic: On positive edge of MCU1 sck
+    // Receive data from sender MCU
     always_ff @(posedge sck_in) begin
-        if (!sending && !cs_in) begin
-            // Shift data in MSB-first
-            {decryptionKey, msgLength} <= {decryptionKey, msgLength, sdi};
-
-            // Prepare sending after 136 bits received
-            if (bitCount == 8'd135) begin
-                sending  <= 1'b1;
-                shiftOut <= {decryptionKey, msgLength};
-                bitCount <= 8'd0;
+        if (!cs_in) begin  // CS active low
+            // Shift in data MSB first
+            shift_reg <= {shift_reg[134:0], sdi};
+            bit_count <= bit_count + 1;
+            receiving <= 1'b1;
+            
+            // After 136 bits (8 + 128), latch the data
+            if (bit_count == 8'd135) begin
+                msg_length <= shift_reg[135:128];  // Top 8 bits
+                decryption_key <= shift_reg[127:0]; // Bottom 128 bits
+                key_ready <= 1'b1;  // Pulse ready signal
+                bit_count <= 8'd0;
+            end else begin
+                key_ready <= 1'b0;
             end
-            else begin
-                bitCount <= bitCount + 1;
-            end
+        end else begin
+            // CS deasserted - reset for next transmission
+            key_ready <= 1'b0;
+            bit_count <= 8'd0;
+            receiving <= 1'b0;
         end
-
-        // Reset counter after CS goes high
-        if (cs_in) begin
-            bitCount <= 8'd0;
-        end
-    end 
-
-    // Shiftout logic: On positive edge of MCU2 sck
-    always_ff @(posedge sck_out) begin
-        if (sending && !cs_out) begin 
-            shiftOut <= {shiftOut[134:0], 1'b0};
-        end
-    end
-
-    // Output logic: On negative edge of MCU2 sck
-    always_ff @(negedge sck_out) begin
-        if (sending && !cs_out)
-            sdo_next <= shiftOut[135]; // current MSB
-        else
-            sdo_next <= 1'b0;          // idle state
-    end
-
-    assign sdo = sdo_next;
-    assign ready = sending;
-
-    // Reset signals after sending is done
-    always_ff @(posedge cs_out) begin
-        sending  <= 1'b0;
-        ready    <= 1'b0;
-        bitCount <= 8'd0;
-        shiftOut <= 136'd0;
     end
 
 endmodule
