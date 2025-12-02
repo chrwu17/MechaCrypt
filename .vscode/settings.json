@@ -6,6 +6,7 @@
         "stm32l432kc_tim.h": "c",
         "stdint.h": "c",
         "msgreceive.h": "c",
-        "stdio.h": "c"
+        "stdio.h": "c",
+        "fpga_decrypt.h": "c"
     }
 }
