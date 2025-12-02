@@ -17,8 +17,7 @@ module sender (
     output logic sdo,           // SPI data out
     output logic [7:0] msg_out, // 8-bit message output
     output logic tx_clk,         // Transfer clock output
-    output logic send_done,     // Sending done signal
-    output logic done
+    output logic send_done
 );  
     
      // Internal high-speed oscillator

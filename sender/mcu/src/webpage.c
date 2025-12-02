@@ -21,12 +21,14 @@ volatile int bridge_keys_sent = 0;
 // ------------ Transmit state machine (SPI + LOAD/DONE) ------------
 typedef enum {
   TX_IDLE = 0,
-  TX_WAIT_DONE
+  TX_ENCRYPTING,      // Waiting for AES encryption to complete
+  TX_SENDING          // Waiting for message transmission to complete
 } tx_state_t;
 
 static volatile tx_state_t tx_state = TX_IDLE;
 static volatile int current_idx = -1;
 static volatile int next_idx = 0;
+static volatile uint8_t prev_done_state = 0;  // Track previous DONE pin state
 
 // LED debug
 static void led_blink_short(void) {
@@ -156,21 +158,15 @@ static int decode_hex_list(const char *hex, uint8_t *buf, int maxlen) {
 
 // ----------------- BIT-BANGING SPI CORE -----------------
 
-/* Send a single bit via bit-banged SPI
- * Manually toggles SCK and MOSI to send one bit per clock cycle
- * This matches the FPGA's expectation of bit-serial data
- */
+/* Send a single bit via bit-banged SPI */
 static inline void spi_send_bit(uint8_t bit) {
-    digitalWrite(SPI_COPI, bit & 1);   // Set MOSI to bit value
-    // Small delay for setup time (optional, tune if needed)
+    digitalWrite(SPI_COPI, bit & 1);
     for (volatile int i = 0; i < 4; i++) { __NOP(); }
     
-    digitalWrite(SPI_SCK, 1);          // Clock high
-    // Hold time
+    digitalWrite(SPI_SCK, 1);
     for (volatile int i = 0; i < 4; i++) { __NOP(); }
     
-    digitalWrite(SPI_SCK, 0);          // Clock low
-    // Inter-bit delay
+    digitalWrite(SPI_SCK, 0);
     for (volatile int i = 0; i < 4; i++) { __NOP(); }
 }
 
@@ -186,7 +182,6 @@ static void spi_send_128bits(const uint8_t *data) {
 
 /* Send plaintext + key pair to FPGA 1 using bit-banging */
 static void spi_send_pair_blocking(const uint8_t *pt16, const uint8_t *key16) {
-    // Protocol: LOAD high, CS low, send data bit-by-bit, CS high, LOAD low
     digitalWrite(LOAD_PIN, 1);
     digitalWrite(SPI_CE, 0);
     
@@ -200,11 +195,15 @@ static void spi_send_pair_blocking(const uint8_t *pt16, const uint8_t *key16) {
     digitalWrite(LOAD_PIN, 0);
 }
 
-// ----------------- SPI + handshake core -----------------
-static inline int done_is_high(void) {
-  return (digitalRead(DONE_PIN) != 0);
+// ----------------- Edge detection for DONE signal -----------------
+static inline int detect_done_rising_edge(void) {
+  uint8_t current_done = digitalRead(DONE_PIN);
+  int rising_edge = (current_done && !prev_done_state);
+  prev_done_state = current_done;
+  return rising_edge;
 }
 
+// ----------------- Block transmission control -----------------
 static void start_send_if_valid(int i) {
   if (i < 0 || i >= (int)total_blocks) return;
   if (!have_block[i]) return;
@@ -212,7 +211,7 @@ static void start_send_if_valid(int i) {
   spi_send_pair_blocking((const uint8_t*)plaintext_blocks[i], (const uint8_t*)keys[i]);
   current_idx = i;
   next_idx = i + 1;
-  tx_state = TX_WAIT_DONE;
+  tx_state = TX_ENCRYPTING;  // Now waiting for encryption to finish
   led_blink_short();
 }
 
@@ -223,8 +222,18 @@ static void try_send_next_ready(void) {
       return;
     }
   }
+  // No more blocks to send
   tx_state = TX_IDLE;
   current_idx = -1;
+  next_idx = 0;
+  
+  // Optional: signal completion
+  for (int j = 0; j < 2; j++) {
+    digitalWrite(LED_PIN, 1);
+    delay_millis(TIM15, 100);
+    digitalWrite(LED_PIN, 0);
+    delay_millis(TIM15, 100);
+  }
 }
 
 // ----------------- Public: init IO + SPI -----------------
@@ -233,12 +242,15 @@ void mechacrypt_init_io_and_spi(void) {
   pinMode(DONE_PIN, GPIO_INPUT);  
 
   // Configure SPI pins as GPIO for bit-banging
-  pinMode(SPI_SCK, GPIO_OUTPUT);   digitalWrite(SPI_SCK, 0);   // SCK idle low
-  pinMode(SPI_COPI, GPIO_OUTPUT);  digitalWrite(SPI_COPI, 0);  // MOSI idle low
-  pinMode(SPI_CE, GPIO_OUTPUT);    digitalWrite(SPI_CE, 1);    // CS idle high
+  pinMode(SPI_SCK, GPIO_OUTPUT);   digitalWrite(SPI_SCK, 0);
+  pinMode(SPI_COPI, GPIO_OUTPUT);  digitalWrite(SPI_COPI, 0);
+  pinMode(SPI_CE, GPIO_OUTPUT);    digitalWrite(SPI_CE, 1);
   
   // Set SCK to high speed
-  GPIOB->OSPEEDR |= GPIO_OSPEEDR_OSPEED3;  // PB3 = SCK
+  GPIOB->OSPEEDR |= GPIO_OSPEEDR_OSPEED3;
+  
+  // Initialize edge detection
+  prev_done_state = digitalRead(DONE_PIN);
   
   // Clear state
   tx_state = TX_IDLE;
@@ -249,13 +261,25 @@ void mechacrypt_init_io_and_spi(void) {
 
 // ----------------- Public: main-loop poll -----------------
 void mechacrypt_poll_and_advance(void) {
-  if (tx_state == TX_WAIT_DONE) {
-    if (done_is_high()) {
+  // State machine to handle both encryption done and send_done signals
+  
+  if (tx_state == TX_ENCRYPTING) {
+    // Waiting for encryption to complete
+    if (detect_done_rising_edge()) {
+      // First rising edge: encryption done, SPRAM write starting
+      delay_millis(TIM15, 2);  // Small delay for SPRAM operations
+      tx_state = TX_SENDING;   // Now wait for message transmission
+    }
+  }
+  else if (tx_state == TX_SENDING) {
+    // Waiting for message transmission to complete
+    if (detect_done_rising_edge()) {
+      // Second rising edge: message transmission done
       delay_millis(TIM15, 1);
-      if (done_is_high()) {
-        tx_state = TX_IDLE;
-        try_send_next_ready();
-      }
+      
+      // Move to next block
+      tx_state = TX_IDLE;
+      try_send_next_ready();
     }
   }
 }

@@ -105,9 +105,6 @@ module msgSend #(
                 end
             end
 
-        end else if (!start && send_done) begin
-            // Clear send_done when start goes low
-            send_done <= 0;
         end
     end
 
