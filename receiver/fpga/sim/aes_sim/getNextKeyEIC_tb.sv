@@ -16,12 +16,12 @@ module getNextKeyEIC_tb();
     logic clk;
     logic [31:0] rcon;
     logic [3:0][31:0] currKey, nextKey, nextKeyExpected;
-    logic pass = 1'b1; // indicates if test passed
+    logic pass = 1'b1;
 
     // device under test
     getNextKeyEIC dut(clk, currKey, rcon, nextKey);
 
-    // generate clock and load signals
+    // generate clock
     always begin
         clk = 1; #5;
         clk = 0; #5;
@@ -40,7 +40,7 @@ module getNextKeyEIC_tb();
         32'h1B000000, 
         32'h36000000};
 
-    // Expected key expansion 
+    // Expected key expansion (from FIPS-197 Appendix A.1)
     localparam logic [127:0] EXP [1:10] = '{
         128'hA0FAFE1788542CB123A339392A6C7605,
         128'hF2C295F27A96B9435935807A7359F67F,
@@ -54,12 +54,19 @@ module getNextKeyEIC_tb();
         128'hD014F9A8C9EE2589E13F0CC8B6630CA6};
 
     initial begin
-        currKey <= 128'h2B7E151628AED2A6ABF7158809CF4F3C; // initial key
+        currKey = 128'h2B7E151628AED2A6ABF7158809CF4F3C; // initial key
+        rcon = 0;
+        
+        #20; // Initial stabilization
 
         for (int round = 1; round <= 10; round++) begin
-            rcon <= RCON[round];
-            nextKeyExpected <= EXP[round];
-            @(posedge clk); #1; // S-box cycle delay
+            rcon = RCON[round];
+            nextKeyExpected = EXP[round];
+            
+            // Wait 2 cycles: 1 for sbox_sync, 1 for internal register
+            @(posedge clk);
+            @(posedge clk);
+            #1; // Small delay for combinational logic after register
 
             if (nextKey != nextKeyExpected) begin
                 $display("Error: Round %0d failed; nextKey = %h, expected %h", round, nextKey, nextKeyExpected);
@@ -68,8 +75,11 @@ module getNextKeyEIC_tb();
                 $display("Round %0d: Passed", round);
             end
 
-            currKey <= nextKey; // advance to next round
+            currKey = nextKey; // advance to next round
+            @(posedge clk); // Extra cycle between rounds
         end
+
+        #20;
 
         if (pass) 
             $display("All rounds passed. Testbench ran successfully");

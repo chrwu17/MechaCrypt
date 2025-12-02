@@ -14,66 +14,80 @@
 module testbench_aes_core();
     logic clk, load, done_decrypt;
     logic [127:0] key, plaintext, cyphertext, expected;
-    logic pass = 1'b1; // indicates if test passed
+    logic pass = 1'b1;
     
     // device under test
     aes_core dut(clk, load, key, cyphertext, done_decrypt, plaintext);
     
-    // generate clock and load signals
+    // generate clock
     always begin
-			clk = 1'b0; #5;
-			clk = 1'b1; #5;
-	end
+        clk = 1'b0; #5;
+        clk = 1'b1; #5;
+    end
         
     // test cases
     initial begin
         load       = 0;
         key        = 0;
         cyphertext = 0;
+        
+        #20; // Initial delay
 
         // Test case from FIPS-197 Appendix A.1, B
-        key        <= 128'h2B7E151628AED2A6ABF7158809CF4F3C;
-        cyphertext <= 128'h3925841D02DC09FBDC118597196A0B32;
-        expected   <= 128'h3243F6A8885A308D313198A2E0370734;
+        key        = 128'h2B7E151628AED2A6ABF7158809CF4F3C;
+        cyphertext = 128'h3925841D02DC09FBDC118597196A0B32;
+        expected   = 128'h3243F6A8885A308D313198A2E0370734;
         
-        load = 1'b1; #22; load = 1'b0; //Pulse load to start conversion
+        @(posedge clk);
+        load = 1'b1; 
+        @(posedge clk);
+        @(posedge clk);
+        load = 1'b0;
 
-        // wait for done_decrypt signal
-        wait (done_decrypt==1); #15;
+        // wait for done_decrypt signal (will take longer now due to pipelining)
+        wait (done_decrypt == 1'b1);
+        #15;
 
-      	if (plaintext == expected)
-      	  $display("Test 1 passed");
-      	else begin
-      	  $display("Error in Test 1: plaintext = %h, expected %h", plaintext, expected);
-      	  pass = 0;
-      	end
+        if (plaintext == expected) begin
+            $display("Test 1 PASSED");
+        end else begin
+            $display("Test 1 FAILED: plaintext = %h, expected %h", plaintext, expected);
+            pass = 0;
+        end
          
-        #10;
+        #50;
 
-        // Alternate test case from Appendix C.1
-        key        <= 128'h000102030405060708090A0B0C0D0E0F;
-        cyphertext <= 128'h69C4E0D86A7B0430D8CDB78070B4C55A;
-        expected   <= 128'h00112233445566778899AABBCCDDEEFF;
+        // Test case from Appendix C.1
+        key        = 128'h000102030405060708090A0B0C0D0E0F;
+        cyphertext = 128'h69C4E0D86A7B0430D8CDB78070B4C55A;
+        expected   = 128'h00112233445566778899AABBCCDDEEFF;
 
-        load = 1'b1; #22; load = 1'b0; //Pulse load to start conversion
+        @(posedge clk);
+        load = 1'b1;
+        @(posedge clk);
+        @(posedge clk);
+        load = 1'b0;
 
         // wait for done_decrypt signal
-        wait (done_decrypt==1); #5;
+        wait (done_decrypt == 1'b1);
+        #15;
 
-      	if (plaintext == expected)
-      	  $display("Test 2 passed");
-      	else begin
-      	  $display("Error in Test 2: plaintext = %h, expected %h", plaintext, expected);
-      	  pass = 0;
-      	end 
+        if (plaintext == expected) begin
+            $display("Test 2 PASSED");
+        end else begin
+            $display("Test 2 FAILED: plaintext = %h, expected %h", plaintext, expected);
+            pass = 0;
+        end 
         
-        #50; #50;
+        #50;
 
         // Check results
         if (pass)
             $display("All tests passed");
         else
       	    $display("Error: one or more tests failed");
+
+        $stop();
 
         $stop();
     end

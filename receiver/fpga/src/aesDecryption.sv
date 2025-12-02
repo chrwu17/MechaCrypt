@@ -8,7 +8,7 @@
 /////////////////////////////////////////////
 
 module aesDecryption(
-           input  logic clk,  // For simulation, replace with internal oscillator in FPGA
+        //    input  logic clk,  // For simulation, replace with internal oscillator in FPGA
            input  logic sck, 
            input  logic sdi,
            input  logic load,
@@ -16,7 +16,7 @@ module aesDecryption(
            output logic done_decrypt);
                     
     logic [127:0] key, plaintext, cyphertext;
-    // logic clk;
+    logic clk;
     
     // Synchronize load signal to the clk instead of sck
     logic load_meta, load_sync;
@@ -26,7 +26,8 @@ module aesDecryption(
     end
 
     // Internal high-speed oscillator to generate slow clock
-    // HSOSC hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
+    HSOSC #(CLKHF_DIV(2'b00)) 
+          hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
             
     aes_spi spi(sck, sdi, sdo, done_decrypt, key, cyphertext, plaintext);
 
@@ -83,39 +84,41 @@ endmodule
 //   and works backwards to K0. 
 //   Key schedule is run for all 10 rounds to generate K1..K10, and K0 is the original key.
 //   EqInv requires pre-mixing round keys 1..9 by applying InvMixColumns while keeping K0 and K10 unchanged.
-//   This is also done during key schedule generation to save time during decryption rounds.
+//   This is also done during key schedule generation to save time during decryption rounds. It also adds extra
+//   cycles due to invmixcolumns pipelining, so the decryption rounds are adjusted accordingly.
 /////////////////////////////////////////////
 
 module aes_core(
     input  logic         clk, 
     input  logic         load,
     input  logic [127:0] key, 
-    input  logic [127:0] cyphertext,        // NEW
-    output logic         done_decrypt,      // NEW
-    output logic [127:0] plaintext);        // NEW
+    input  logic [127:0] cyphertext,
+    output logic         done_decrypt,
+    output logic [127:0] plaintext);
 
     // Internal signals
-    logic ka_busy, ka_done; // advance key schedule signals
+    logic ka_busy, ka_done;
     logic [3:0][31:0] currKey, nextKey, word;
     logic [31:0] rcon;
-    logic [3:0] ka_round, round_idx, roundCount, cycleCount;
-    logic [127:0] state; // Holds intermediate state of the data
+    logic [3:0] ka_round, round_idx, roundCount;
+    logic [4:0] cycleCount;  // Increased to 5 bits for more cycles
+    logic [127:0] state;
     logic [127:0] bfrSub, afterSub, afterShift, afterMix, bfrAdd, afterAdd;
-    logic [127:0] keyPreMix, keyAfterMix; // For key mixing
+    logic [127:0] keyPreMix, keyAfterMix;
 
-    // Equivalent Inverse Cipher Data path signals and setup
+    // Instantiate modules with pipelined versions
     inv_subBytes sub(clk, bfrSub, afterSub);
     inv_shiftRows shift(afterSub, afterShift);
-    inv_mixcolumns mix(afterShift, afterMix);
+    inv_mixcolumns_sync mix(clk, afterShift, afterMix);
     addRoundKey add(bfrAdd, word, afterAdd);
 
-    getNextKeyEIC keyExp(clk, currKey, rcon, nextKey);
+    getNextKeyEIC keyExp(clk, currKey, rcon, nextKey);  // SYNCHRONOUS
 
-    // premix keys
-    assign keyPreMix = {nextKey[3], nextKey[2], nextKey[1], nextKey[0]}; // pack 4x32-bit words into 128-bit for mixing
-    inv_mixcolumns premixKeys(keyPreMix, keyAfterMix);
+    // Premix keys
+    assign keyPreMix = {nextKey[3], nextKey[2], nextKey[1], nextKey[0]};
+    inv_mixcolumns_sync premixKeys(clk, keyPreMix, keyAfterMix);
 
-    // Arrays to store original and premixed keys for rounds
+    // Arrays to store keys
     logic [10:0][127:0] roundKeys, premixedKeys;
 
     always_ff @(posedge clk) begin
@@ -124,76 +127,78 @@ module aes_core(
             cycleCount <= 0;
             done_decrypt <= 0;
 
-            // If begining, load key and cyphertext
-            roundKeys[0] <= {key[127:96], key[95:64], key[63:32], key[31:0]}; // Key for round 0
+            // Load key and cyphertext
+            roundKeys[0] <= {key[127:96], key[95:64], key[63:32], key[31:0]};
             currKey <= {key[127:96], key[95:64], key[63:32], key[31:0]};
-
-            // Initial input cyphertext and round
             bfrAdd <= cyphertext;
 
-            // start key schedule advance to build K1..K10 (+ premix K1..K9)
+            // Start key schedule
             ka_round <= 0;
             ka_busy <= 1;
             ka_done <= 0;
 
-        end else if (ka_busy) begin // Key schedule advance
-            if (cycleCount == 0) begin
-                currKey <= nextKey; // step the schedule
-
-                // Store the raw round keys
+        end else if (ka_busy) begin
+            if (cycleCount == 2) begin
+                currKey <= nextKey;
                 roundKeys[ka_round + 1] <= {nextKey[3], nextKey[2], nextKey[1], nextKey[0]};
-
-                // Store the premixed round keys for rounds 1..9
+            end
+            
+            // After single cyle delay for invmixcolumns pipelining, store premixed keys
+            if (cycleCount == 4) begin
                 if ((ka_round + 1) >= 1 && (ka_round + 1) <= 9) begin
-                    premixedKeys[ka_round + 1] <= keyAfterMix; // InvMixColumns applied
+                    premixedKeys[ka_round + 1] <= keyAfterMix;
                 end else begin
-                    premixedKeys[ka_round + 1] <= {nextKey[3], nextKey[2], nextKey[1], nextKey[0]}; // No InvMixColumns for K0 and K10
+                    premixedKeys[ka_round + 1] <= {nextKey[3], nextKey[2], nextKey[1], nextKey[0]};
                 end
             end
 
-            // After advancing till K10, terminate key expansion
-            if ((ka_round == 9) && (cycleCount == 0)) begin
-                ka_busy <= 0;
-                ka_done <= 1;
-            end else if (cycleCount == 0) begin
-                ka_round <= ka_round + 1;
+            // Advance to next round
+            if (cycleCount == 4) begin
+                cycleCount <= 0;
+                if (ka_round == 9) begin
+                    ka_busy <= 0;
+                    ka_done <= 1;
+                end else begin
+                    ka_round <= ka_round + 1;
+                end
+            end else begin
+                cycleCount <= cycleCount + 1;
             end
 
         end else if (!done_decrypt & ka_done) begin
+            // Initial round (round 10)
             if (roundCount == 10) begin
                 if (cycleCount == 0) begin
-                    // Use raw K10 for initial pass
                     word <= {roundKeys[10][127:96], 
                              roundKeys[10][95:64], 
                              roundKeys[10][63:32], 
                              roundKeys[10][31:0]};
-                end if (cycleCount == 3) begin
-                    state <= afterAdd; // First state
+                end 
+                if (cycleCount == 4) begin
+                    state <= afterAdd;
                 end
             end
 
-            // Process rounds (9 - 1) with premixed keys
+            // Middle rounds (9 down to 1)
             if ((roundCount > 0) && (roundCount < 10)) begin
                 if (cycleCount == 0) begin
-                    // Use premixed keys for rounds 1..9
                     word <= {premixedKeys[roundCount][127:96], 
                              premixedKeys[roundCount][95:64], 
                              premixedKeys[roundCount][63:32], 
                              premixedKeys[roundCount][31:0]};
                     bfrSub <= state;
                 end 
-                if (cycleCount == 2) begin
+                if (cycleCount == 4) begin
                     bfrAdd <= afterMix;
                 end 
-                if (cycleCount == 3) begin
-                    state <= afterAdd; // Next state
+                if (cycleCount == 5) begin
+                    state <= afterAdd;
                 end
             end 
 
-            // If it's round 0, we're done. Skip column mixing.
+            // Final round (round 0) - no mixcolumns
             if (roundCount == 0) begin
                 if (cycleCount == 0) begin
-                    // Use raw K0 for final round
                     word <= {roundKeys[0][127:96], 
                              roundKeys[0][95:64], 
                              roundKeys[0][63:32], 
@@ -201,7 +206,7 @@ module aes_core(
                     bfrSub <= state;
                 end 
                 if (cycleCount == 2) begin
-                    bfrAdd <= afterShift; // Skip mixcolumns
+                    bfrAdd <= afterShift; //Skip mixcolumns
                 end 
                 if (cycleCount == 3) begin
                     plaintext <= afterAdd;
@@ -210,7 +215,9 @@ module aes_core(
             end
 
             // Update cycle and round counters
-            if (cycleCount == 3) begin
+            if ((roundCount == 10 && cycleCount == 4) ||
+                (roundCount > 0 && roundCount < 10 && cycleCount == 5) ||
+                (roundCount == 0 && cycleCount == 3)) begin
                 cycleCount <= 0;
                 if (roundCount > 0) roundCount <= roundCount - 1;
             end else begin
@@ -235,31 +242,12 @@ module aes_core(
             4'd7 : rcon = 32'h80000000;
             4'd8 : rcon = 32'h1b000000;
             4'd9 : rcon = 32'h36000000;
-
             default: rcon = 32'h00000000; 
         endcase
     end 
 endmodule
 
 ///////////////////////// AES Decryption Primitives for Equivalent Inverse Cipher //////////////////////////////
-
-/////////////////////////////////////////////
-// sbox
-//   Infamous AES byte substitutions with magic numbers
-//   Combinational version which is mapped to LUTs (logic cells)
-//   Section 5.1.1, Figure 7
-/////////////////////////////////////////////
-
-module sbox(input  logic [7:0] a,
-            output logic [7:0] y);
-
-    // sbox implemented as a ROM
-    // This module is combinational and will be inferred using LUTs (logic cells)
-    logic [7:0] sbox[0:255];
-
-    initial   $readmemh("D:/MicroPs/MechaCrypt/receiver/fpga/src/sbox.txt", sbox);
-    assign y = sbox[a];
-endmodule
 
 /////////////////////////////////////////////
 // sbox
@@ -300,47 +288,6 @@ module inv_sbox_sync(input  logic [7:0] a,
     always_ff @(posedge clk) begin
         y <= invsbox[a];
     end
-endmodule
-
-/////////////////////////////////////////////                  
-// inv_mixcolumns
-//  Inverse MixColumns transformation
-/////////////////////////////////////////////
-module inv_mixcolumns(input  logic [127:0] a,
-                      output logic [127:0] y);
-
-    inv_mixcolumn imc0(a[127:96], y[127:96]);
-    inv_mixcolumn imc1(a[95:64],  y[95:64]);
-    inv_mixcolumn imc2(a[63:32],  y[63:32]);
-    inv_mixcolumn imc3(a[31:0],   y[31:0]);
-endmodule
-
-/////////////////////////////////////////////                  
-// inv_mixcolumn
-//  performs matrix inverse multiplication on a single column 
-//  follows inverse MixColumns logic defined in Section 5.3.3 EQ(5.15) of NIST: FIPS-197
-/////////////////////////////////////////////
-
-module inv_mixcolumn(input  logic [31:0] a,
-                     output logic [31:0] y);
-
-    logic [7:0] a0, a1, a2, a3, y0, y1, y2, y3;
-
-    assign {a0,a1,a2,a3} = a;
-
-    // Row 0: 0E·a0 ^ 0B·a1 ^ 0D·a2 ^ 09·a3
-    assign y0 = mulE(a0) ^ mulB(a1) ^ mulD(a2) ^ mul9(a3);
-
-    // Row 1: 09·a0 ^ 0E·a1 ^ 0B·a2 ^ 0D·a3
-    assign y1 = mul9(a0) ^ mulE(a1) ^ mulB(a2) ^ mulD(a3);
-
-    // Row 2: 0D·a0 ^ 09·a1 ^ 0E·a2 ^ 0B·a3
-    assign y2 = mulD(a0) ^ mul9(a1) ^ mulE(a2) ^ mulB(a3);
-
-    // Row 3: 0B·a0 ^ 0D·a1 ^ 09·a2 ^ 0E·a3
-    assign y3 = mulB(a0) ^ mulD(a1) ^ mul9(a2) ^ mulE(a3);
-
-    assign y = {y0, y1, y2, y3};
 endmodule
 
 /////////////////////////////////////////////                  
@@ -389,6 +336,66 @@ endmodule
         mulE = mul8(a) ^ mul4(a) ^ mul2(a); // 0x0E
     endfunction
 
+/////////////////////////////////////////////                  
+// inv_mixcolumn
+//  performs matrix inverse multiplication on a single column 
+//  follows inverse MixColumns logic defined in Section 5.3.3 EQ(5.15) of NIST: FIPS-197
+/////////////////////////////////////////////
+
+module inv_mixcolumn(input  logic [31:0] a,
+                     output logic [31:0] y);
+
+    logic [7:0] a0, a1, a2, a3, y0, y1, y2, y3;
+
+    assign {a0,a1,a2,a3} = a;
+
+    // Row 0: 0E·a0 ^ 0B·a1 ^ 0D·a2 ^ 09·a3
+    assign y0 = mulE(a0) ^ mulB(a1) ^ mulD(a2) ^ mul9(a3);
+
+    // Row 1: 09·a0 ^ 0E·a1 ^ 0B·a2 ^ 0D·a3
+    assign y1 = mul9(a0) ^ mulE(a1) ^ mulB(a2) ^ mulD(a3);
+
+    // Row 2: 0D·a0 ^ 09·a1 ^ 0E·a2 ^ 0B·a3
+    assign y2 = mulD(a0) ^ mul9(a1) ^ mulE(a2) ^ mulB(a3);
+
+    // Row 3: 0B·a0 ^ 0D·a1 ^ 09·a2 ^ 0E·a3
+    assign y3 = mulB(a0) ^ mulD(a1) ^ mul9(a2) ^ mulE(a3);
+
+    assign y = {y0, y1, y2, y3};
+endmodule
+
+/////////////////////////////////////////////                  
+// inv_mixcolumns
+//  Inverse MixColumns transformation
+/////////////////////////////////////////////
+module inv_mixcolumns(input  logic [127:0] a,
+                      output logic [127:0] y);
+
+    inv_mixcolumn imc0(a[127:96], y[127:96]);
+    inv_mixcolumn imc1(a[95:64],  y[95:64]);
+    inv_mixcolumn imc2(a[63:32],  y[63:32]);
+    inv_mixcolumn imc3(a[31:0],   y[31:0]);
+endmodule
+
+/////////////////////////////////////////////
+// inv_mixcolumns_sync
+//   Pipelined version with 1 register stage
+//   to break up the combinational path
+/////////////////////////////////////////////
+module inv_mixcolumns_sync(
+    input  logic clk,
+    input  logic [127:0] a,
+    output logic [127:0] y
+);
+    logic [127:0] stage1;
+
+    always_ff @(posedge clk) begin
+        stage1 <= a;
+    end
+    
+    // Computational stage
+    inv_mixcolumns imc(stage1, y);
+endmodule
 
 /////////////////////////////////////////////                  
 // inv_subBytes
@@ -482,20 +489,33 @@ module getNextKeyEIC(input  logic clk,
                     
     logic [31:0] t;
     logic [7:0]  t0, t1, t2, t3, s0, s1, s2, s3;
+    logic [7:0]  s0_reg, s1_reg, s2_reg, s3_reg;
+    logic [3:0][31:0] currKey_reg;
+    logic [31:0] rcon_reg;
 
-    // rotate left by 8 bits
+    // Rotate left by 8 bits
     assign {t0, t1, t2, t3} = currKey[0];
-    assign t = {t1, t2, t3, t0}; // rotated word
+    assign t = {t1, t2, t3, t0};
 
-    // apply sbox to each byte of t
-    sbox sb0(t[31:24], s0);
-    sbox sb1(t[23:16], s1);
-    sbox sb2(t[15:8],  s2);
-    sbox sb3(t[7:0],   s3);
+    // Apply synchronous sbox to each byte
+    sbox_sync sb0(t[31:24], clk, s0);
+    sbox_sync sb1(t[23:16], clk, s1);
+    sbox_sync sb2(t[15:8],  clk, s2);
+    sbox_sync sb3(t[7:0],   clk, s3);
     
-    // generate next key
-    assign nextKey[3] = currKey[3] ^ ({s0, s1, s2, s3} ^ rcon);
-    assign nextKey[2] = currKey[2] ^ nextKey[3];
-    assign nextKey[1] = currKey[1] ^ nextKey[2];
-    assign nextKey[0] = currKey[0] ^ nextKey[1];
+    // Register the sbox outputs and inputs for next stage
+    always_ff @(posedge clk) begin
+        s0_reg <= s0;
+        s1_reg <= s1;
+        s2_reg <= s2;
+        s3_reg <= s3;
+        currKey_reg <= currKey;
+        rcon_reg <= rcon;
+    end
+    
+    // Generate next key from registered values
+    assign nextKey[3] = currKey_reg[3] ^ ({s0_reg, s1_reg, s2_reg, s3_reg} ^ rcon_reg);
+    assign nextKey[2] = currKey_reg[2] ^ nextKey[3];
+    assign nextKey[1] = currKey_reg[1] ^ nextKey[2];
+    assign nextKey[0] = currKey_reg[0] ^ nextKey[1];
 endmodule
