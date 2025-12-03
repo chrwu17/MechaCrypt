@@ -16,11 +16,11 @@
 #include "msgReceive.h"
 
 // System-level constants
-#define LED_PIN   PB3 // Debug LED
+#define LED_PIN   PC1 // Debug LED
 
-// SPI Transaction Pins
-#define READY_PIN PA5
-#define VALID_PIN PA6
+// // SPI Transaction Pins
+// #define READY_PIN PA5
+// #define VALID_PIN PA6
 
 
 

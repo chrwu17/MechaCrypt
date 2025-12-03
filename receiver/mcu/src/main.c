@@ -28,28 +28,77 @@ void delay_us(uint32_t us)
     SysTick->CTRL = 0;
 }
 
+// Global millisecond counter (overflows after ~49 days)
+volatile uint32_t g_millis = 0;
+
 /**
- * @brief Demo function to test the progress bar
- * Call this from main() to see the progress bar in action
+ * @brief Initialize TIM15 for 1ms interrupts
  */
-void demo_progress_bar(void) {
-    // Simulate receiving 16 blocks (256 bytes total)
-    set_expected_transfer_size(256);
-    lcd_update_transfer_status(&g_lcd, 0, get_total_expected_blocks());
+void initTIM15_millis(void) {
+    RCC->APB2ENR |= RCC_APB2ENR_TIM15EN;
     
-    delay_millis(TIM15, 1000);  // Pause before starting
+    // Assuming 80 MHz system clock
+    // Prescaler = 7999 gives 10 kHz (0.1ms per tick)
+    // ARR = 9 gives interrupt every 1ms
+    TIM15->PSC = 7999;   // (80,000,000 / (7999+1)) = 10,000 Hz
+    TIM15->ARR = 9;      // (10,000 / (9+1)) = 1,000 Hz (1ms)
     
-    // Simulate receiving blocks one by one
-    for (int i = 0; i < 16; i++) {
-        delay_millis(TIM15, 800);  // Wait 800ms between blocks
-        on_block_received(&g_lcd);  // Update progress
+    // Enable update interrupt
+    TIM15->DIER |= TIM_DIER_UIE;
+    
+    // Enable TIM15 interrupt in NVIC
+    NVIC_EnableIRQ(TIM1_BRK_TIM15_IRQn);
+    NVIC_SetPriority(TIM1_BRK_TIM15_IRQn, 3);
+    
+    // Start timer
+    TIM15->CR1 |= TIM_CR1_CEN;
+}
+
+/**
+ * @brief TIM15 interrupt handler - increments millisecond counter
+ */
+void TIM1_BRK_TIM15_IRQHandler(void) {
+    if (TIM15->SR & TIM_SR_UIF) {
+        TIM15->SR &= ~TIM_SR_UIF;  // Clear flag
+        g_millis++;
+    }
+}
+
+/**
+ * @brief Get current millisecond count
+ */
+uint32_t get_millis(void) {
+    return g_millis;
+}void demo_progress_bar_nonblocking(void) {
+    static uint32_t last_update = 0;
+    static int block_count = 0;
+    static uint8_t demo_started = 0;
+    
+    // Start demo if not started
+    if (!demo_started) {
+        set_expected_transfer_size(256);
+        lcd_update_transfer_status(&g_lcd, 0, get_total_expected_blocks());
+        demo_started = 1;
+        last_update = get_millis();
+        return;
     }
     
-    // Show completion for 3 seconds
-    delay_millis(TIM15, 3000);
-    
-    // Reset for next demo cycle
-    reset_progress();
+    // Check if 800ms has elapsed
+    uint32_t now = get_millis();
+    if (now - last_update >= 800) {
+        if (block_count < 16) {
+            on_block_received(&g_lcd);
+            block_count++;
+            last_update = now;
+        } else {
+            // Demo complete - reset after 3 seconds
+            if (now - last_update >= 3800) {
+                reset_progress();
+                block_count = 0;
+                demo_started = 0;
+            }
+        }
+    }
 }
 
 static void lcd_hw_init(void)
@@ -85,6 +134,8 @@ int main(void)
     // Timer for delay_millis (used elsewhere in project)
     initTIM(TIM15);
 
+    initTIM15_millis();
+
     // Initiallize USART1 for ESP8266
     USART_TypeDef *USART = initUSART(USART1_ID, 125000);
 
@@ -116,7 +167,7 @@ int main(void)
     pinMode(SPI_CE, GPIO_OUTPUT);
     digitalWrite(SPI_CE, 1);  // idle high (not selected)
 
-
+    
     // Main loop:
     //  - service HTTP
     //  - SPI fetches blocks from FPGA
@@ -124,7 +175,7 @@ int main(void)
         processWebRequest(USART);
 
         // receiver_spi_demo_poll(); // Uncomment to enable SPI fetching
-        demo_progress_bar();
+        demo_progress_bar_nonblocking();
 
         if (get_received_block_count() >= get_total_expected_blocks() && get_total_expected_blocks() > 0) {
             // All blocks received

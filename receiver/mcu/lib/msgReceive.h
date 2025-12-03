@@ -16,13 +16,13 @@
 // Pin Definitions
 ///////////////////////////////////////////////////////////////////////////////
 
-#define TX_CLK PA6   // Pin for transfer clock line
-#define BIT_0 PA0    // Pin for bit 0 line
-#define BIT_1 PA1    // Pin for bit 1 line 
-#define BIT_2 PA2    // Pin for bit 2 line
-#define BIT_3 PA3    // Pin for bit 3 line
-#define BIT_4 PA4    // Pin for bit 4 line
-#define BIT_5 PA5    // Pin for bit 5 line
+#define TX_CLK PA0   // Pin for transfer clock line (triggers on rising edge)
+#define BIT_0 PA1    // Pin for bit 0 line
+#define BIT_1 PA2    // Pin for bit 1 line 
+#define BIT_2 PA3    // Pin for bit 2 line
+#define BIT_3 PA4    // Pin for bit 3 line
+#define BIT_4 PA5    // Pin for bit 4 line
+#define BIT_5 PA6    // Pin for bit 5 line
 #define BIT_6 PA7    // Pin for bit 6 line
 #define BIT_7 PA12   // Pin for bit 7 line
 

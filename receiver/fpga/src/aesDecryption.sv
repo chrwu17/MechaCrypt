@@ -306,7 +306,7 @@ endmodule
 //   and reduction mod the AES polynomial 0x11B (x^8+x^4+x^3+x+1)
 /////////////////////////////////////////////
 
-    // xtime (×2 in GF(2^8)) with reduction mod 0x11B
+    // xtime (Ãƒâ€”2 in GF(2^8)) with reduction mod 0x11B
     function automatic [7:0] xtime(input [7:0] a);
         xtime = a[7] ? ({a[6:0],1'b0} ^ 8'h1b) : {a[6:0],1'b0};
     endfunction
@@ -353,16 +353,16 @@ module inv_mixcolumn(input  logic [31:0] a,
 
     assign {a0,a1,a2,a3} = a;
 
-    // Row 0: 0E·a0 ^ 0B·a1 ^ 0D·a2 ^ 09·a3
+    // Row 0: 0EÃ‚Â·a0 ^ 0BÃ‚Â·a1 ^ 0DÃ‚Â·a2 ^ 09Ã‚Â·a3
     assign y0 = mulE(a0) ^ mulB(a1) ^ mulD(a2) ^ mul9(a3);
 
-    // Row 1: 09·a0 ^ 0E·a1 ^ 0B·a2 ^ 0D·a3
+    // Row 1: 09Ã‚Â·a0 ^ 0EÃ‚Â·a1 ^ 0BÃ‚Â·a2 ^ 0DÃ‚Â·a3
     assign y1 = mul9(a0) ^ mulE(a1) ^ mulB(a2) ^ mulD(a3);
 
-    // Row 2: 0D·a0 ^ 09·a1 ^ 0E·a2 ^ 0B·a3
+    // Row 2: 0DÃ‚Â·a0 ^ 09Ã‚Â·a1 ^ 0EÃ‚Â·a2 ^ 0BÃ‚Â·a3
     assign y2 = mulD(a0) ^ mul9(a1) ^ mulE(a2) ^ mulB(a3);
 
-    // Row 3: 0B·a0 ^ 0D·a1 ^ 09·a2 ^ 0E·a3
+    // Row 3: 0BÃ‚Â·a0 ^ 0DÃ‚Â·a1 ^ 09Ã‚Â·a2 ^ 0EÃ‚Â·a3
     assign y3 = mulB(a0) ^ mulD(a1) ^ mul9(a2) ^ mulE(a3);
 
     assign y = {y0, y1, y2, y3};
