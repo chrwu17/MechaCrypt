@@ -14,6 +14,7 @@
 #include "webpage.h"
 #include "lcd_progress.h"
 #include "msgReceive.h"
+#include "fpga_decrypt.h"
 
 // System-level constants
 #define LED_PIN   PC1 // Debug LED

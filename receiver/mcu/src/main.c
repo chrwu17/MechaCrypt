@@ -90,24 +90,27 @@ static void lcd_hw_init(void)
  * Call this in main loop to check for new blocks
  */
 void process_received_blocks(void) {
-    // Check if a complete block has been received
     if (messageReceivedFlag) {
-        // Clear flag immediately
         messageReceivedFlag = 0;
-        
-        // Blink LED to show activity
         digitalWrite(LED_PIN, 1);
         
-        // Store the block in webpage storage
-        // Use blocks_processed as the block index
-        receiver_store_block(blocks_processed, (const uint8_t*)receivedMessage);
+        // ✅ CORRECT: Decrypt first, then store plaintext
+        uint8_t plaintext[16];
+        int result = fpgaDecryptBlock(
+            (const uint8_t*)receivedMessage,  // ciphertext from mechanical system
+            plaintext                          // output plaintext
+        );
         
-        // Update LCD progress
-        on_block_received(&g_lcd);
+        if (result == 0) {
+            // Decryption successful
+            receiver_store_block(blocks_processed, plaintext);
+            on_block_received(&g_lcd);
+            blocks_processed++;
+        } else {
+            // Decryption failed - log error or retry
+            // For now, maybe just skip this block
+        }
         
-        blocks_processed++;
-        
-        // Turn off LED
         digitalWrite(LED_PIN, 0);
     }
 }
