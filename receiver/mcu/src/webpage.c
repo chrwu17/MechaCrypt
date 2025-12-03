@@ -15,16 +15,14 @@
 // Shared State (Receiver)
 // ======================================================
 
-volatile uint8_t received_blocks[MAX_BLOCKS][16];      // Raw ciphertext (not used in display)
-volatile uint8_t plaintext_blocks[MAX_BLOCKS][16];     // Decrypted plaintext for display
+volatile uint8_t received_blocks[MAX_BLOCKS][16];
+volatile uint8_t plaintext_blocks[MAX_BLOCKS][16]; 
 volatile uint8_t have_received[MAX_BLOCKS];
 volatile uint16_t total_received      = 0;
 volatile uint16_t debug_request_count = 0;
 
-// ======================================================
-// Debug LED Helper
-// ======================================================
 
+// Debug LED
 static void led_blink_short(void) {
     digitalWrite(LED_PIN, 1);
     delay_millis(TIM15, 100);
@@ -143,13 +141,15 @@ const char webpage[] =
 "  try{"
 "    const resp=await fetch('/data');"
 "    const raw=await resp.text();"
+"    console.log('RAW /data response:',raw);"
 "    const data=JSON.parse(raw);"
 "    updateUI(data);"
 "  }catch(e){"
 "    console.error('Fetch/JSON error:',e);"
-"    status.textContent='Error fetching /data';"
+"    status.textContent='Error fetching /data (see console)';"
 "  }"
 "}"
+
 
 "function updateUI(data){"
 "  const count=data.total_received||0;"
@@ -210,18 +210,18 @@ const char webpage[] =
 "</body></html>";
 
 // ======================================================
-// Helper Functions
+// Small Helpers
 // ======================================================
 
 static inline int line_has_lf(const char *buf) {
     return strchr(buf, '\n') != NULL;
 }
 
-// Stream JSON out over USART to avoid large buffers
+// Stream JSON out over USART so we don't need a giant buffer.
 static void send_json_status(USART_TypeDef *USART) {
     char numbuf[16];
 
-    // JSON body
+    // JSON body only:
     sendString(USART, "{ \"total_received\": ");
 
     snprintf(numbuf, sizeof(numbuf), "%u", (unsigned)total_received);
@@ -232,7 +232,7 @@ static void send_json_status(USART_TypeDef *USART) {
         sendChar(USART, '[');
         for (int j = 0; j < 16; j++) {
             snprintf(numbuf, sizeof(numbuf), "%u",
-                     (unsigned)plaintext_blocks[i][j]);
+                     (unsigned)plaintext_blocks[i][j]); // or received_blocks[i][j]
             sendString(USART, numbuf);
             if (j < 15) {
                 sendChar(USART, ',');
@@ -247,15 +247,74 @@ static void send_json_status(USART_TypeDef *USART) {
     sendString(USART, "] }\r\n");
 }
 
+
+
 // ======================================================
-// Public API: Store a received plaintext block
+// Demo helper: seed plaintext_blocks with sample ASCII
 // ======================================================
 
-void receiver_store_block(uint16_t idx, const uint8_t plaintext[16]) {
+void receiver_demo_init_plaintext(void)
+{
+    const char *msg =
+        "MECHACRYPT DEMO\n"
+        "Hello from the MCU receiver.\n"
+        "These bytes are shown as HEX and ASCII.\n";
+
+    size_t len = strlen(msg);
+
+    // Simple PKCS#7-like padding so the JS unpadding logic is happy
+    uint8_t pad = (uint8_t)(16 - (len % 16));
+    if (pad == 0) pad = 16;
+
+    size_t total_bytes = len + pad;
+    size_t blocks = total_bytes / 16;
+    if (blocks > MAX_BLOCKS) {
+        blocks = MAX_BLOCKS;
+        total_bytes = blocks * 16;
+        if (len > total_bytes) {
+            len = total_bytes;  // hard cut if somehow longer
+        }
+    }
+
+    // Clear existing state
+    memset((void*)received_blocks,  0, sizeof(received_blocks));
+    memset((void*)plaintext_blocks, 0, sizeof(plaintext_blocks));
+    memset((void*)have_received,    0, sizeof(have_received));
+
+    // Fill blocks with the ASCII message + padding
+    for (size_t i = 0; i < blocks; i++) {
+        for (size_t j = 0; j < 16; j++) {
+            size_t idx = i * 16 + j;
+            uint8_t b;
+            if (idx < len) {
+                b = (uint8_t)msg[idx];
+            } else {
+                b = pad;
+            }
+            received_blocks[i][j]  = b;  // raw data
+            plaintext_blocks[i][j] = b;  // what the UI will show
+        }
+        have_received[i] = 1;
+    }
+
+    total_received = (uint16_t)blocks;
+}
+
+
+
+// ======================================================
+// Public helper: store a received block
+// ======================================================
+
+void receiver_store_block(uint16_t idx, const uint8_t blk[16]) {
     if (idx >= MAX_BLOCKS) return;
 
-    // Store plaintext for webpage display
-    memcpy((void*)plaintext_blocks[idx], plaintext, 16);
+    // Raw data from FPGA 
+    memcpy((void*)received_blocks[idx], blk, 16);
+
+    // For now, treat it as “plaintext” too (later you can copy decrypted data here)
+    memcpy((void*)plaintext_blocks[idx], blk, 16);
+
     have_received[idx] = 1;
 
     if (idx + 1 > total_received) {
@@ -266,8 +325,9 @@ void receiver_store_block(uint16_t idx, const uint8_t plaintext[16]) {
     led_blink_short();
 }
 
+
 // ======================================================
-// Request Handler
+// Request handler
 // ======================================================
 
 void processWebRequest(USART_TypeDef *USART)
@@ -299,7 +359,6 @@ void processWebRequest(USART_TypeDef *USART)
 
     // Handle: GET /data
     if (strstr(request, "/data") || strstr(request, "data")) {
-        sendString(USART, (char*)http_header_json);
         send_json_status(USART);
         return;
     }
@@ -308,7 +367,7 @@ void processWebRequest(USART_TypeDef *USART)
     if (strstr(request, "/clear") || strstr(request, "clear")) {
         for (int i = 0; i < MAX_BLOCKS; i++) {
             memset((void*)received_blocks[i],  0, 16);
-            memset((void*)plaintext_blocks[i], 0, 16);
+            memset((void*)plaintext_blocks[i], 0, 16);  // NEW
             have_received[i] = 0;
         }
         total_received = 0;
@@ -316,7 +375,42 @@ void processWebRequest(USART_TypeDef *USART)
         return;
     }
 
+
     // Default: serve the full receiver UI page
     sendString(USART, (char*)http_header_ok);
     sendString(USART, (char*)webpage);
+}
+
+// ----------------- SPI demo: fetch one block from FPGA -----------------
+
+static void spi_demo_fetch_block(void)
+{
+    if (total_received >= MAX_BLOCKS) {
+        return;
+    }
+
+    uint8_t buf[16];
+
+    // Select FPGA (CS low)
+    digitalWrite(SPI_CE, 0);
+
+    // 16 bytes = 128 bits
+    for (int i = 0; i < 16; i++) {
+        buf[i] = (uint8_t) spiSendReceive(0x00);  // send dummy, read data
+    }
+
+    // De-select FPGA (CS high)
+    digitalWrite(SPI_CE, 1);
+
+    // Store into shared state so /data + UI see it
+    receiver_store_block(total_received, buf);
+}
+
+// Public function called from main loop
+void receiver_spi_demo_poll(void)
+{
+    // For a simple demo: just grab 4 blocks, then stop
+    if (total_received < 4) {
+        spi_demo_fetch_block();
+    }
 }

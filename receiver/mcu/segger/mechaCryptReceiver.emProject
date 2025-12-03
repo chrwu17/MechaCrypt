@@ -60,6 +60,7 @@
     <folder Name="Source Files">
       <configuration Name="Common" filter="c;cpp;cxx;cc;h;s;asm;inc" />
       <folder Name="lib">
+        <file file_name="../lib/fpga_decrypt.h" />
         <file file_name="../lib/lcd_i2c.h" />
         <file file_name="../lib/lcd_progress.h" />
         <file file_name="../lib/main.h" />
@@ -75,6 +76,7 @@
         <file file_name="../lib/webpage.h" />
       </folder>
       <folder Name="src">
+        <file file_name="../src/fpga_decrypt.c" />
         <file file_name="../src/lcd_i2c.c" />
         <file file_name="../src/lcd_progress.c" />
         <file file_name="../src/main.c" />

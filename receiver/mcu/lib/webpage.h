@@ -11,18 +11,18 @@
 #include <stdint.h>
 #include "STM32L432KC.h"
 
-#define MAX_BLOCKS     64           // Maximum number of blocks that can be stored
-#define BUFF_LEN       512          // HTTP request line buffer size
+#define MAX_BLOCKS     64           // number of blocks UI can stage
+#define BUFF_LEN       512          // HTTP request line buffer
 
 /**
  * Shared state for received plaintext blocks from FPGA.
  * 
  * Convention:
- *  - Blocks are 16-byte plaintext chunks (decrypted ciphertext)
- *  - total_received is the number of sequential blocks starting at 0
- *    that have been filled (i.e., valid indices: 0 .. total_received-1)
+ *  - Blocks are 16-byte plaintext chunks.
+ *  - total_received is the number of *sequential* blocks starting at 0
+ *    that have been filled (i.e., valid indices: 0 .. total_received-1).
  */
-extern volatile uint8_t plaintext_blocks[MAX_BLOCKS][16];
+extern volatile uint8_t received_blocks[MAX_BLOCKS][16];
 extern volatile uint8_t have_received[MAX_BLOCKS];
 extern volatile uint16_t total_received;
 extern volatile uint16_t debug_request_count;
@@ -37,19 +37,22 @@ extern const char webpage[];
  * 
  * Endpoints:
  *   GET /          -> send HTML UI
- *   GET /data      -> JSON dump of plaintext blocks
+ *   GET /data      -> JSON dump of blocks
  *   GET /clear     -> clear all stored blocks (returns 204 No Content)
  */
 void processWebRequest(USART_TypeDef *USART);
 
 /**
- * Helper for FPGA decryption code:
- *   Record a newly decrypted 16-byte plaintext block at index idx.
+ * Helper for SPI / FPGA code:
+ *   Record a newly received 16-byte block at index idx.
  *   Updates have_received[] and total_received accordingly.
- * 
- * @param idx Block index (0-63)
- * @param plaintext 16-byte plaintext block
  */
-void receiver_store_block(uint16_t idx, const uint8_t plaintext[16]);
+void receiver_store_block(uint16_t idx, const uint8_t blk[16]);
+
+// Poll the SPI demo source on FPGA and store new blocks (if any)
+void receiver_spi_demo_poll(void);
+
+void receiver_demo_init_plaintext(void);   // from webpage.c
+
 
 #endif // WEBPAGE_H

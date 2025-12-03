@@ -11,8 +11,8 @@
 #include "../lib/fpga_decrypt.h"
 
 // FPGA control pins
-#define FPGA_LOAD  PA8   // Load signal to start decryption
-#define FPGA_DONE  PA11  // Done signal from FPGA
+#define FPGA_LOAD  PA5   // Load signal to start decryption
+#define FPGA_DONE  PA6  // Done signal from FPGA
 
 /**
  * @brief Initialize FPGA decryption interface
