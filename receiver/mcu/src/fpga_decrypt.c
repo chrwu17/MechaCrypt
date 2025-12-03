@@ -1,19 +1,16 @@
 /**
  * @file fpga_decrypt.c
  * @author Christian Wu
- * @date 2025-11-25
- * @brief SPI interface to FPGA AES decryption module
- *        Sends 128-bit ciphertext, receives 128-bit plaintext
- *        (FPGA already has the key from bridge module)
+ * @date 2025-12-03
+ * @brief Updated SPI interface - sends KEY + CIPHERTEXT to FPGA for decryption
  */
 
 #include "../lib/STM32L432KC.h"
 #include "../lib/fpga_decrypt.h"
 
-
 // FPGA control pins
 #define FPGA_LOAD  PA5   // Load signal to start decryption
-#define FPGA_DONE  PA6  // Done signal from FPGA
+#define FPGA_DONE  PA6   // Done signal from FPGA
 
 /**
  * @brief Initialize FPGA decryption interface
@@ -30,19 +27,25 @@ void initFPGADecrypt(void) {
 }
 
 /**
- * @brief Send ciphertext to FPGA and receive decrypted plaintext
+ * @brief Send key and ciphertext to FPGA, receive decrypted plaintext
+ * @param key 16-byte decryption key
  * @param ciphertext 16-byte input ciphertext block
  * @param plaintext 16-byte output plaintext block
  * @return 0 on success, -1 on timeout
  * 
- * Protocol (simplified - FPGA already has key):
+ * NEW PROTOCOL (matches sender's encryption protocol):
  * 1. Assert LOAD
- * 2. Send 128 bits via SPI: ciphertext[127:0]
- * 3. Deassert LOAD
- * 4. Wait for DONE signal
- * 5. Send 128 dummy bits to clock out plaintext[127:0]
+ * 2. Select FPGA (CS low)
+ * 3. Send 128 bits: KEY[127:0]       (MSB first, key[15] down to key[0])
+ * 4. Send 128 bits: CIPHERTEXT[127:0] (MSB first, ciphertext[15] down to ciphertext[0])
+ * 5. Deselect FPGA (CS high)
+ * 6. Deassert LOAD to start decryption
+ * 7. Wait for DONE signal from FPGA
+ * 8. Select FPGA again
+ * 9. Read 128 bits: PLAINTEXT[127:0] (MSB first)
+ * 10. Deselect FPGA
  */
-int fpgaDecryptBlock(const uint8_t ciphertext[16], uint8_t plaintext[16]) {
+int fpgaDecryptBlock(const uint8_t key[16], const uint8_t ciphertext[16], uint8_t plaintext[16]) {
     
     // Step 1: Assert LOAD signal
     digitalWrite(FPGA_LOAD, 1);
@@ -53,19 +56,29 @@ int fpgaDecryptBlock(const uint8_t ciphertext[16], uint8_t plaintext[16]) {
     // Step 2: Select FPGA (CS low)
     digitalWrite(SPI_CE, 0);
     
-    // Send 128 bits: CIPHERTEXT (MSB first)
-    // Send ciphertext[15] down to ciphertext[0]
+    // Small delay for CS setup time
+    for (volatile int i = 0; i < 10; i++) { __NOP(); }
+    
+    // Step 3: Send 128-bit KEY (MSB first: key[15] -> key[0])
+    for (int i = 15; i >= 0; i--) {
+        spiSendReceive(key[i]);
+    }
+    
+    // Step 4: Send 128-bit CIPHERTEXT (MSB first: ciphertext[15] -> ciphertext[0])
     for (int i = 15; i >= 0; i--) {
         spiSendReceive(ciphertext[i]);
     }
     
-    // Deselect FPGA (CS high)
+    // Small delay before CS high
+    for (volatile int i = 0; i < 10; i++) { __NOP(); }
+    
+    // Step 5: Deselect FPGA (CS high)
     digitalWrite(SPI_CE, 1);
     
-    // Step 3: Deassert LOAD signal to start decryption
+    // Step 6: Deassert LOAD signal to start decryption
     digitalWrite(FPGA_LOAD, 0);
     
-    // Step 4: Wait for DONE signal (with timeout)
+    // Step 7: Wait for DONE signal (with timeout)
     uint32_t timeout = 1000000;  // Adjust based on your clock speed
     while (!digitalRead(FPGA_DONE) && timeout > 0) {
         timeout--;
@@ -76,18 +89,44 @@ int fpgaDecryptBlock(const uint8_t ciphertext[16], uint8_t plaintext[16]) {
         return -1;
     }
     
-    // Step 5: DONE is asserted, now clock out plaintext
+    // Step 8: DONE is asserted, now clock out plaintext
     // Select FPGA again
     digitalWrite(SPI_CE, 0);
     
-    // Clock out 128 bits of plaintext (MSB first)
+    // Small delay
+    for (volatile int i = 0; i < 10; i++) { __NOP(); }
+    
+    // Step 9: Clock out 128 bits of plaintext (MSB first)
     // FPGA shifts out plaintext[127] down to plaintext[0]
     for (int i = 15; i >= 0; i--) {
         plaintext[i] = (uint8_t)spiSendReceive(0x00);  // Send dummy, receive data
     }
     
-    // Deselect FPGA
+    // Step 10: Deselect FPGA
     digitalWrite(SPI_CE, 1);
     
     return 0;  // Success
+}
+
+/**
+ * @brief Alternative interface that takes block index and fetches key
+ * @param block_idx Block index to decrypt
+ * @param ciphertext 16-byte ciphertext
+ * @param plaintext 16-byte plaintext output
+ * @param getKeyFunc Function pointer to retrieve key for block_idx
+ * @return 0 on success, -1 on error
+ */
+int fpgaDecryptBlockWithIndex(uint8_t block_idx, 
+                               const uint8_t ciphertext[16], 
+                               uint8_t plaintext[16],
+                               int (*getKeyFunc)(uint8_t, uint8_t*)) {
+    uint8_t key[16];
+    
+    // Fetch key for this block
+    if (getKeyFunc(block_idx, key) != 0) {
+        return -1;  // Key not available
+    }
+    
+    // Decrypt using key + ciphertext
+    return fpgaDecryptBlock(key, ciphertext, plaintext);
 }

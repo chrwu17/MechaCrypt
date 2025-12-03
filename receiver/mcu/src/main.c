@@ -86,36 +86,6 @@ static void lcd_hw_init(void)
 }
 
 /**
- * @brief Process received message blocks from mechanical system
- * Call this in main loop to check for new blocks
- */
-void process_received_blocks(void) {
-    if (messageReceivedFlag) {
-        messageReceivedFlag = 0;
-        digitalWrite(LED_PIN, 1);
-        
-        // ✅ CORRECT: Decrypt first, then store plaintext
-        uint8_t plaintext[16];
-        int result = fpgaDecryptBlock(
-            (const uint8_t*)receivedMessage,  // ciphertext from mechanical system
-            plaintext                          // output plaintext
-        );
-        
-        if (result == 0) {
-            // Decryption successful
-            receiver_store_block(blocks_processed, plaintext);
-            on_block_received(&g_lcd);
-            blocks_processed++;
-        } else {
-            // Decryption failed - log error or retry
-            // For now, maybe just skip this block
-        }
-        
-        digitalWrite(LED_PIN, 0);
-    }
-}
-
-/**
  * @brief Display debug info on LCD (for testing)
  */
 void display_debug_info(void) {
@@ -194,9 +164,127 @@ void display_test_mode(void) {
     }
 }
 
-// ----------------- Main entry -----------------
-int main(void)
-{
+uint32_t keys_ready = 0;
+/**
+ * @brief Process received message blocks from mechanical system
+ * NOW USES KEYS FROM SENDER MCU
+ */
+void process_received_blocks(void) {
+    if (messageReceivedFlag) {
+        messageReceivedFlag = 0;
+        digitalWrite(LED_PIN, 1);
+        
+        // Check if we have the key for this block
+        if (!keys_ready) {
+            // Keys not received yet - skip or buffer
+            digitalWrite(LED_PIN, 0);
+            return;
+        }
+        
+        // Fetch key for current block
+        uint8_t key[16];
+        int key_result = getReceivedKey(blocks_processed, key);
+        
+        if (key_result != 0) {
+            // Key not available for this block index
+            //led_error_blink();
+            digitalWrite(LED_PIN, 0);
+            return;
+        }
+        
+        // Decrypt: KEY + CIPHERTEXT -> PLAINTEXT
+        uint8_t plaintext[16];
+        int decrypt_result = fpgaDecryptBlock(
+            key,                               // Key from sender MCU
+            (const uint8_t*)receivedMessage,   // Ciphertext from mechanical
+            plaintext                          // Output plaintext
+        );
+        
+        if (decrypt_result == 0) {
+            // Decryption successful - store plaintext
+            receiver_store_block(blocks_processed, plaintext);
+            on_block_received(&g_lcd);
+            blocks_processed++;
+        } else {
+            // Decryption failed
+            //led_error_blink();
+        }
+        
+        digitalWrite(LED_PIN, 0);
+    }
+}
+
+/**
+ * @brief Poll for incoming keys from sender MCU
+ * Call this in main loop before processing blocks
+ */
+void poll_for_keys(void) {
+    if (!keys_ready) {
+        // Poll key reception state machine
+        pollKeyReception();
+        
+        // Check if reception complete
+        if (areKeysReceived()) {
+            keys_ready = 1;
+            
+            // Update LCD with key count
+            uint8_t num_keys = getNumKeysReceived();
+            uint8_t orig_len = getOriginalMessageLength();
+            
+            lcd_set_cursor(&g_lcd, 0, 1);
+            char buf[21];
+            snprintf(buf, sizeof(buf), "Keys RX: %u (L=%u) ", num_keys, orig_len);
+            lcd_print(&g_lcd, buf);
+            
+            // Set expected transfer size for progress bar
+            set_expected_transfer_size(orig_len);
+            
+            // Visual feedback
+            for (int i = 0; i < 3; i++) {
+                digitalWrite(LED_PIN, 1);
+                delay_millis(TIM15, 100);
+                digitalWrite(LED_PIN, 0);
+                delay_millis(TIM15, 100);
+            }
+        }
+    }
+}
+
+/**
+ * @brief Display status including key reception
+ */
+void display_status_with_keys(void) {
+    static uint32_t last_update = 0;
+    uint32_t now = get_millis();
+    
+    if (now - last_update < 500) return;
+    last_update = now;
+    
+    char buf[21];
+    
+    // Line 0: Title
+    lcd_set_cursor(&g_lcd, 0, 0);
+    lcd_print(&g_lcd, "MechaCrypt Receiver ");
+    
+    // Line 1: Key status
+    lcd_set_cursor(&g_lcd, 0, 1);
+    if (keys_ready) {
+        snprintf(buf, sizeof(buf), "Keys:%u Blk:%u    ", 
+                 getNumKeysReceived(), blocks_processed);
+    } else {
+        lcd_print(&g_lcd, "Waiting for keys... ");
+    }
+    lcd_print(&g_lcd, buf);
+    
+    // Line 2 & 3: Progress bar (if keys received)
+    if (keys_ready && get_total_expected_blocks() > 0) {
+        lcd_update_transfer_status(&g_lcd, blocks_processed, 
+                                    get_total_expected_blocks());
+    }
+}
+
+// Main entry point
+int main(void) {
     // Core clocks
     configureFlash();
     configureClock();
@@ -210,17 +298,15 @@ int main(void)
     pinMode(LED_PIN, GPIO_OUTPUT);
     digitalWrite(LED_PIN, 0);
 
-    // Timer for delays
+    // Timers
     initTIM(TIM15);
     initTIM15_millis();
 
-    // Initialize USART1 for ESP8266
+    // USART for ESP8266
     USART_TypeDef *USART = initUSART(USART1_ID, 125000);
 
-    // Initialize LCD
+    // LCD
     lcd_hw_init();
-
-    // Show startup message
     lcd_clear(&g_lcd);
     lcd_set_cursor(&g_lcd, 0, 0);
     lcd_print(&g_lcd, "MechaCrypt Receiver ");
@@ -228,29 +314,34 @@ int main(void)
     lcd_print(&g_lcd, "Initializing...     ");
     delay_millis(TIM15, 1000);
 
-    // Initialize mechanical message receiver (CRITICAL!)
+    // Initialize mechanical message receiver
     initMsgReceive();
 
-    // Clear demo data and prepare for real reception
+    // Initialize MCU-to-MCU SPI receiver (NEW!)
+    initMCU_SPI_Receiver();
+
+    // Clear storage
     for (int i = 0; i < MAX_BLOCKS; i++) {
         memset((void*)received_blocks[i], 0, 16);
         have_received[i] = 0;
     }
     total_received = 0;
+    keys_ready = 0;
 
-    // Initialize SPI for FPGA (for later use)
+    // Initialize FPGA SPI
     initSPI(0b111, 0, 0);
     pinMode(SPI_CE, GPIO_OUTPUT);
     digitalWrite(SPI_CE, 1);
+    
+    // Initialize FPGA decrypt interface
+    initFPGADecrypt();
 
     // Ready message
     lcd_clear(&g_lcd);
     lcd_set_cursor(&g_lcd, 0, 0);
-    lcd_print(&g_lcd, "Ready to Receive    ");
-    lcd_set_cursor(&g_lcd, 0, 1);
-    lcd_print(&g_lcd, "Blocks: 0           ");
+    lcd_print(&g_lcd, "Waiting for Keys... ");
     
-    // Blink LED to show ready
+    // Blink to show ready
     for (int i = 0; i < 3; i++) {
         digitalWrite(LED_PIN, 1);
         delay_millis(TIM15, 100);
@@ -260,26 +351,20 @@ int main(void)
 
     // Main loop
     while (1) {
-        // Process any received blocks from mechanical system
+        // 1. Poll for incoming keys from sender MCU (PRIORITY)
+        poll_for_keys();
+        
+        // 2. Process received blocks from mechanical system
+        //    (only after keys are ready)
         process_received_blocks();
         
-        // Service HTTP requests from ESP8266
+        // 3. Service HTTP requests
         processWebRequest(USART);
         
-        // Display debug info on LCD
-        // Choose one of these display modes:
+        // 4. Update display
+        display_status_with_keys();
         
-        // Option 1: Debug mode - shows raw ISR counts and byte values
-        display_debug_info();
-        
-        // Option 2: Test mode - shows received bytes in hex
-        // display_test_mode();
-        
-        // Option 3: Progress mode - shows transfer progress
-        // lcd_update_transfer_status(&g_lcd, blocks_processed, 
-        //                           get_total_expected_blocks());
-        
-        // Small delay to prevent overwhelming the LCD
+        // Small delay
         delay_millis(TIM15, 10);
     }
 }

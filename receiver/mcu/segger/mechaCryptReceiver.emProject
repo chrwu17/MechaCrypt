@@ -64,6 +64,7 @@
         <file file_name="../lib/lcd_i2c.h" />
         <file file_name="../lib/lcd_progress.h" />
         <file file_name="../lib/main.h" />
+        <file file_name="../lib/mcu_to_mcu_spi.h" />
         <file file_name="../lib/msgReceive.h" />
         <file file_name="../lib/STM32L432KC.h" />
         <file file_name="../lib/STM32L432KC_FLASH.h" />
@@ -80,6 +81,7 @@
         <file file_name="../src/lcd_i2c.c" />
         <file file_name="../src/lcd_progress.c" />
         <file file_name="../src/main.c" />
+        <file file_name="../src/mcu_to_mcu_spi.c" />
         <file file_name="../src/msgReceive.c" />
         <file file_name="../src/STM32L432KC_FLASH.c" />
         <file file_name="../src/STM32L432KC_GPIO.c" />

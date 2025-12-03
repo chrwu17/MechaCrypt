@@ -1,5 +1,4 @@
 #include "../lib/main.h"
-#include "../lib/bridge.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -189,47 +188,6 @@ static void spi_send_pair_hw(const uint8_t *pt16, const uint8_t *key16) {
     digitalWrite(LOAD_PIN, 0);
 }
 
-// ----------------- Bridge: Send all keys to FPGA 2 using hardware SPI -----------------
-static int bridge_send_all_keys_hw(uint8_t num_blocks, uint8_t orig_length) {
-    // Send header: original message length + number of blocks
-    bridgeSelect();
-    delay_millis(TIM15, 2);
-    
-    // Send message length (1 byte)
-    spiSendReceive(orig_length);
-    
-    // Send number of blocks (1 byte)
-    spiSendReceive(num_blocks);
-    
-    bridgeDeselect();
-    delay_millis(TIM15, 10);  // Longer delay after header
-    
-    // Send all keys, one at a time
-    for (int block = 0; block < num_blocks; block++) {
-        if (!have_block[block]) {
-            led_error_blink();
-            return -1;
-        }
-        
-        bridgeSelect();
-        delay_millis(TIM15, 2);
-        
-        // Send 128-bit key for this block (16 bytes)
-        spi_send_128bits_hw((const uint8_t*)keys[block]);
-        
-        bridgeDeselect();
-        delay_millis(TIM15, 10);  // Delay between keys
-        
-        // Brief LED flash every 4 keys
-        if ((block % 4) == 0) {
-            digitalWrite(LED_PIN, 1);
-            delay_millis(TIM15, 50);
-            digitalWrite(LED_PIN, 0);
-        }
-    }
-    
-    return 0;
-}
 
 // ----------------- Updated initialization function -----------------
 void mechacrypt_init_io_and_spi(void) {
@@ -241,6 +199,7 @@ void mechacrypt_init_io_and_spi(void) {
     // Adjust baud rate divider as needed for your FPGA timing requirements
     initSPI(0b010, 0, 0);  // 80MHz/8 = 10MHz SPI clock
     
+    initMCU_SPI_Sender();  // Initialize bridge SPI CS pin
     // Initialize edge detection
     prev_done_state = digitalRead(DONE_PIN);
     
@@ -398,32 +357,35 @@ void processWebRequest(USART_TypeDef *USART)
       message_length = orig_len;
     }
 
-    if (total_blocks > 0 && have_block[0]) {
-      // STEP 1: Send ALL keys to FPGA 2 via bridge
-      led_blink_bridge();
-      
-      int bridge_result = bridge_send_all_keys_hw((uint8_t)total_blocks, orig_len);
-      
-      if (bridge_result == 0) {
-        bridge_keys_sent = 1;
-        led_blink_bridge();
-        
-        delay_millis(TIM15, 10);
-        
-        // STEP 2: Start SPI transmission to FPGA 1 (encryption)
-        if (tx_state == TX_IDLE) {
-          start_send_if_valid(0);
-        }
+      if (total_blocks > 0 && have_block[0]) {
+          // STEP 1: Send ALL keys to receiver MCU via dedicated SPI
+          led_blink_bridge();  // Reuse LED pattern for feedback
+          
+          // Cast volatile array to const for function call
+          int mcu_result = sendKeysToReceiverMCU(
+              (const uint8_t (*)[16])keys,  // Array of keys
+              (uint8_t)total_blocks,         // Number of blocks
+              orig_len                       // Original message length
+          );
+          
+          if (mcu_result == 0) {
+              // Keys successfully sent to receiver MCU
+              led_blink_bridge();
+              delay_millis(TIM15, 50);
+              
+              // STEP 2: Start SPI transmission to FPGA 1 (encryption)
+              // This sends plaintext+key pairs for encryption as before
+              if (tx_state == TX_IDLE) {
+                  start_send_if_valid(0);
+              }
+          } else {
+              // Failed to send keys to receiver MCU
+              led_error_blink();
+          }
       } else {
-        led_error_blink();
+          led_error_blink();
       }
-    } else {
-      led_error_blink();
-    }
-    
-    sendString(USART, (char*)http_header_no_content);
-    return;
-  }
+}
 
   // Otherwise: serve full page
   sendString(USART, (char*)http_header_ok);

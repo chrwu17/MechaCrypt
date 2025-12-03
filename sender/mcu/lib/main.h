@@ -12,7 +12,7 @@
 #include "STM32L432KC.h"
 #include "webpage.h"
 #include "trng.h"
-#include "bridge.h"
+#include "mcu_to_mcu_spi.h"
 
 // ===== Project-wide constants =====
 #define LED_PIN        PB8         // Debug LED

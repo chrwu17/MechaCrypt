@@ -15,6 +15,7 @@
 #include "lcd_progress.h"
 #include "msgReceive.h"
 #include "fpga_decrypt.h"
+#include "mcu_to_mcu_spi.h"
 
 // System-level constants
 #define LED_PIN   PC1 // Debug LED
