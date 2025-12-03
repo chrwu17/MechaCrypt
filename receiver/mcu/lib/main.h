@@ -14,7 +14,10 @@
 #include "webpage.h"
 #include "lcd_progress.h"
 #include "msgReceive.h"
+<<<<<<< HEAD
 
+=======
+>>>>>>> parent of 40e5393 (testing receiver end fixes)
 
 // System-level constants
 #define LED_PIN   PC1 // Debug LED

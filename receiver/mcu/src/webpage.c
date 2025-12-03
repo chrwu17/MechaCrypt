@@ -414,3 +414,7 @@ void receiver_spi_demo_poll(void)
         spi_demo_fetch_block();
     }
 }
+<<<<<<< HEAD
+=======
+
+>>>>>>> parent of 40e5393 (testing receiver end fixes)
