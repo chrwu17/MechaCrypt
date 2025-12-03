@@ -5,7 +5,7 @@
 `timescale 10ns/1ns
 
 /////////////////////////////////////////////
-// testbench_aes_spi
+// testbench_aes_spi (DEBUG VERSION)
 // Tests AES with cases from FIPS-197 appendix
 // Simulates full system with SPI load
 /////////////////////////////////////////////
@@ -13,92 +13,199 @@
 module testbench_aes_spi();
     logic clk, load, done_decrypt, sck, sdi, sdo;
     logic [127:0] key, plaintext, cyphertext, expected;
-    logic [255:0] comb;
-    logic [8:0] i;
-    logic delay;
+    logic [255:0] data_in;
+    logic [127:0] data_out;
     logic pass = 1;
-
 
     // device under test
     aesDecryption dut(clk, sck, sdi, load, sdo, done_decrypt);
 
+    // Monitor internal signals for debugging
+    initial begin
+        $monitor("Time=%t load=%b done=%b sdo=%b plaintext_internal=%h", 
+                 $time, load, done_decrypt, sdo, dut.plaintext);
+    end
+
     // Create dumpfile
     initial begin
-      	$dumpfile("testbench_aes_spi.vcd");
-      	$dumpvars(0, testbench_aes_spi);
+        $dumpfile("testbench_aes_spi.vcd");
+        $dumpvars(0, testbench_aes_spi);
     end
 
-    // generate clock
+    // generate internal clock for aes_core
     always begin
-      	clk = 1'b0; #5;
-      	clk = 1'b1; #5;
+        clk = 1'b0; #5;
+        clk = 1'b1; #5;
     end
 
-    // ---------- TEST SEQUENCE ----------
+    // Initialize
     initial begin
-      	// Test case from FIPS-197 Appendix A.1, B
-      	key        = 128'h2B7E151628AED2A6ABF7158809CF4F3C;
-      	cyphertext = 128'h3925841D02DC09FBDC118597196A0B32;
-      	expected   = 128'h3243F6A8885A308D313198A2E0370734;
+        sck = 0;
+        sdi = 0;
+        load = 0;
+        #100;
 
-      	i = 0; load = 1; delay = 1;
-      	comb = {cyphertext, key};
-      	run_spi_transfer();
+        // ===== TEST 1 =====
+        $display("========================================");
+        $display("Starting Test 1...");
+        $display("========================================");
+        key        = 128'h2B7E151628AED2A6ABF7158809CF4F3C;
+        cyphertext = 128'h3925841D02DC09FBDC118597196A0B32;
+        expected   = 128'h3243F6A8885A308D313198A2E0370734;
+        
+        data_in = {cyphertext, key};
+        
+        // Assert load
+        $display("Asserting load signal");
+        load = 1;
+        #20;
+        
+        // Send 256 bits via SPI (cyphertext first, then key)
+        $display("Sending 256 bits via SPI...");
+        for (int i = 0; i < 256; i++) begin
+            sdi = data_in[255 - i];
+            #10; sck = 1;
+            #10; sck = 0;
+        end
+        $display("SPI input complete");
+        
+        // Deassert load
+        #20;
+        $display("Deasserting load signal");
+        load = 0;
+        #20;
+        
+        // Wait for done_decrypt
+        $display("Waiting for decryption to complete...");
+        wait(done_decrypt == 1);
+        $display("Decryption complete at time %t", $time);
+        $display("Internal plaintext = %h", dut.plaintext);
+        $display("SPI plaintext_captured = %h", dut.spi.plaintextcaptured);
+        $display("SPI wasdone = %b", dut.spi.wasdone);
+        
+        // Small delay for output to stabilize
+        #100;
+        
+        // Read out 128 bits of plaintext
+        $display("Reading 128 bits from SPI...");
+        $display("First few bits:");
+        for (int i = 0; i < 128; i++) begin
+            #10; sck = 1;
+            #5; 
+            data_out[127 - i] = sdo;
+            if (i < 16) $display("  Bit %3d: sdo=%b", i, sdo);
+            #5; sck = 0;
+            #5;
+        end
+        
+        plaintext = data_out;
+        #50;
+        
+        // Check result
+        $display("========================================");
+        $display("TEST 1 RESULTS:");
+        $display("plaintext = %h", plaintext);
+        $display("expected  = %h", expected);
+        $display("========================================");
+        
+        if (plaintext === 128'bx) begin
+            $display("ERROR: plaintext is X (undefined)");
+            pass = 0;
+        end else if (plaintext == expected) begin
+            $display("Test 1 PASSED");
+        end else begin
+            $display("Test 1 FAILED");
+            pass = 0;
+        end
 
-      	if (plaintext == expected)
-      	  $display("Test 1 passed");
-      	else begin
-      	  $display("Error in Test 1: plaintext = %h, expected %h", plaintext, expected);
-      	  pass = 0;
-      	end
-
-      	// small gap before next test
-      	#100;
-
-      	// Alternate test case from Appendix C.1
+        // ===== TEST 2 =====
+        #200;
+        $display("");
+        $display("========================================");
+        $display("Starting Test 2...");
+        $display("========================================");
         key        = 128'h000102030405060708090A0B0C0D0E0F;
         cyphertext = 128'h69C4E0D86A7B0430D8CDB78070B4C55A;
         expected   = 128'h00112233445566778899AABBCCDDEEFF;
+        
+        data_in = {cyphertext, key};
+        
+        // Assert load
+        $display("Asserting load signal");
+        load = 1;
+        #20;
+        
+        // Send 256 bits via SPI
+        $display("Sending 256 bits via SPI...");
+        for (int i = 0; i < 256; i++) begin
+            sdi = data_in[255 - i];
+            #10; sck = 1;
+            #10; sck = 0;
+        end
+        $display("SPI input complete");
+        
+        // Deassert load
+        #20;
+        $display("Deasserting load signal");
+        load = 0;
+        #20;
+        
+        // Wait for done_decrypt
+        $display("Waiting for decryption to complete...");
+        wait(done_decrypt == 1);
+        $display("Decryption complete at time %t", $time);
+        $display("Internal plaintext = %h", dut.plaintext);
+        $display("SPI plaintext_captured = %h", dut.spi.plaintextcaptured);
+        $display("SPI wasdone = %b", dut.spi.wasdone);
+        
+        // Small delay for output to stabilize
+        #100;
+        
+        // Read out 128 bits of plaintext
+        $display("Reading 128 bits from SPI...");
+        $display("First few bits:");
+        for (int i = 0; i < 128; i++) begin
+            #10; sck = 1;
+            #5;
+            data_out[127 - i] = sdo;
+            if (i < 16) $display("  Bit %3d: sdo=%b", i, sdo);
+            #5; sck = 0;
+            #5;
+        end
+        
+        plaintext = data_out;
+        #50;
+        
+        // Check result
+        $display("========================================");
+        $display("TEST 2 RESULTS:");
+        $display("plaintext = %h", plaintext);
+        $display("expected  = %h", expected);
+        $display("========================================");
+        
+        if (plaintext === 128'bx) begin
+            $display("ERROR: plaintext is X (undefined)");
+            pass = 0;
+        end else if (plaintext == expected) begin
+            $display("Test 2 PASSED");
+        end else begin
+            $display("Test 2 FAILED");
+            pass = 0;
+        end
 
-      	i = 0; load = 1; delay = 1;
-      	comb = {cyphertext, key};
-      	run_spi_transfer();
+        // ===== FINAL RESULTS =====
+        #100;
+        $display("");
+        if (pass) begin
+            $display("=================================");
+            $display("ALL TESTS PASSED!");
+            $display("=================================");
+        end else begin
+            $display("=================================");
+            $display("ERROR: One or more tests failed");
+            $display("=================================");
+        end
 
-      	if (plaintext == expected)
-      	  $display("Test 2 passed");
-      	else begin
-      	  $display("Error in Test 2: plaintext = %h, expected %h", plaintext, expected);
-      	  pass = 0;
-      	end
-
-      	if (pass)
-      	  $display("All tests passed");
-      	else
-      	  $display("Error: one or more tests failed");
-
-      	$stop();
+        $stop();
     end
-
-    always @(posedge clk) begin
-      	if (i == 256) load = 1'b0;
-      	if (i < 256) begin
-      	  #1; sdi = comb[255 - i];
-      	  #1; sck = 1; #5; sck = 0;
-      	  i = i + 1;
-      	end else if (done_decrypt && delay) begin
-      	  #100; delay = 0; // allow ciphertext to stabilize
-      	end else if (done_decrypt && i < 384) begin
-      	  #1; sck = 1; 
-      	  #1; plaintext[383 - i] = sdo;
-      	  #4; sck = 0;
-      	  i = i + 1;
-      	end
-    end
-
-    // dummy task to wait for SPI transfer to complete
-    task run_spi_transfer;
-      	begin
-      	  wait(i == 384);
-      	end
-    endtask
 endmodule

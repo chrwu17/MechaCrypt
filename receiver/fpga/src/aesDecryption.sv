@@ -8,7 +8,7 @@
 /////////////////////////////////////////////
 
 module aesDecryption(
-        //    input  logic clk,  // For simulation, replace with internal oscillator in FPGA
+           input  logic clk,  // For simulation, replace with internal oscillator in FPGA
            input  logic sck, 
            input  logic sdi,
            input  logic load,
@@ -16,7 +16,7 @@ module aesDecryption(
            output logic done_decrypt);
                     
     logic [127:0] key, plaintext, cyphertext;
-    logic clk;
+    // logic clk;
     
     // Synchronize load signal to the clk instead of sck
     logic load_meta, load_sync;
@@ -26,8 +26,8 @@ module aesDecryption(
     end
 
     // Internal high-speed oscillator to generate slow clock
-    HSOSC #(.CLKHF_DIV(2'b01)) 
-          hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
+    // HSOSC #(.CLKHF_DIV(2'b00)) 
+    //       hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
             
     aes_spi spi(sck, sdi, sdo, done_decrypt, key, cyphertext, plaintext);
 
@@ -70,7 +70,6 @@ module aes_spi(input  logic sck,
     // when done_decrypt is first asserted, shift out msb before clock edge
     assign sdo = (done_decrypt & !wasdone) ? plaintext[127] : sdodelayed;
 endmodule
-
 
 /////////////////////////////////////////////
 // aes_core
@@ -126,6 +125,9 @@ module aes_core(
             roundCount <= 10;
             cycleCount <= 0;
             done_decrypt <= 0;
+            plaintext <= 128'h0;    // Initialize plaintext
+            state <= 128'h0;        // Initialize state
+            bfrSub <= 128'h0;       // Initialize bfrSub
 
             // Load key and cyphertext
             roundKeys[0] <= {key[127:96], key[95:64], key[63:32], key[31:0]};
@@ -210,6 +212,8 @@ module aes_core(
                 end 
                 if (cycleCount == 3) begin
                     plaintext <= afterAdd;
+                end
+                if (cycleCount == 4) begin
                     done_decrypt <= 1;
                 end
             end
@@ -217,7 +221,7 @@ module aes_core(
             // Update cycle and round counters
             if ((roundCount == 10 && cycleCount == 4) ||
                 (roundCount > 0 && roundCount < 10 && cycleCount == 5) ||
-                (roundCount == 0 && cycleCount == 3)) begin
+                (roundCount == 0 && cycleCount == 4)) begin
                 cycleCount <= 0;
                 if (roundCount > 0) roundCount <= roundCount - 1;
             end else begin
