@@ -8,7 +8,7 @@
  */
 
 #include "../lib/STM32L432KC.h"
-#include "../lib/fpga_decrypt.h"
+
 
 // FPGA control pins
 #define FPGA_LOAD  PA5   // Load signal to start decryption
