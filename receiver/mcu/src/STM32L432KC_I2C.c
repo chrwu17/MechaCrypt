@@ -58,7 +58,7 @@ int i2c_write_byte(uint8_t addr7, uint8_t data) {
     I2C1->CR2 |= I2C_CR2_START;             // Generate START
     
     // Wait for TXIS (transmit register empty)
-    uint32_t timeout = 100000;
+    uint32_t timeout = 4000;
     while (!(I2C1->ISR & I2C_ISR_TXIS) && timeout--) {
         if (I2C1->ISR & I2C_ISR_NACKF) {
             I2C1->ICR |= I2C_ICR_NACKCF;

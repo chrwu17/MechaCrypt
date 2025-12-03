@@ -235,7 +235,16 @@ uint16_t get_total_expected_blocks(void) {
 /**
  * @brief Reset progress counters
  */
-void reset_progress(void) {
+void reset_progress(lcd_i2c_t *lcd) {
     received_block_count = 0;
     total_expected_blocks = 0;
+    lcd_set_cursor(lcd, 0, 3);
+    lcd_print(lcd, "                    ");  // 20 spaces to clear line
+    
+    // Reinitialize custom characters
+    lcd_init_progress_chars(lcd);
+    
+    // Reset progress display
+    lcd_set_cursor(lcd, 0, 1);
+    lcd_update_transfer_status(lcd, 0, get_total_expected_blocks());
 }
