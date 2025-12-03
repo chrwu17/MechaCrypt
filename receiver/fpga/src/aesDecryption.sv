@@ -11,6 +11,7 @@ module aesDecryption(
            input  logic clk,  // For simulation, replace with internal oscillator in FPGA
            input  logic sck, 
            input  logic sdi,
+           input  logic cs,
            input  logic load,
            output logic sdo,
            output logic done_decrypt);
@@ -29,7 +30,7 @@ module aesDecryption(
     // HSOSC #(.CLKHF_DIV(2'b00)) 
     //       hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
             
-    aes_spi spi(sck, sdi, sdo, done_decrypt, key, cyphertext, plaintext);
+    aes_spi spi(sck, sdi, cs, sdo, done_decrypt, key, cyphertext, plaintext);
 
     aes_core core(clk, load_sync, key, cyphertext, done_decrypt, plaintext);
 endmodule
@@ -43,6 +44,7 @@ endmodule
 
 module aes_spi(input  logic sck, 
                input  logic sdi,
+               input  logic cs,
                output logic sdo,
                input  logic done_decrypt,
                output logic [127:0] key, cyphertext,
@@ -57,14 +59,19 @@ module aes_spi(input  logic sck,
     // then apply 128 sclks to shift out plaintext, starting with plaintext[127]
     // SPI mode is equivalent to cpol = 0, cpha = 0 since data is sampled on first edge and the first
     // edge is a rising edge (clock going from low in the idle state to high).
-    always_ff @(posedge sck)
-        if (!wasdone)  {plaintextcaptured, cyphertext, key} = {plaintext, cyphertext[126:0], key, sdi};
-        else           {plaintextcaptured, cyphertext, key} = {plaintextcaptured[126:0], cyphertext, key, sdi}; 
-    
+    always_ff @(posedge sck) begin
+        if (!cs) begin
+            if (!wasdone)  {plaintextcaptured, cyphertext, key} = {plaintext, cyphertext[126:0], key, sdi};
+            else           {plaintextcaptured, cyphertext, key} = {plaintextcaptured[126:0], cyphertext, key, sdi}; 
+        end
+    end
+
     // sdo should change on the negative edge of sck
     always_ff @(negedge sck) begin
-        wasdone = done_decrypt;
-        sdodelayed = plaintextcaptured[126];
+        if (cs) begin            
+            wasdone = done_decrypt;
+            sdodelayed = plaintextcaptured[126];
+        end
     end
     
     // when done_decrypt is first asserted, shift out msb before clock edge
