@@ -2,14 +2,18 @@
  * @file main.c
  * @author Christian Wu
  * @date 2025-11-19
- * @brief Main file for MechaCrypt receiver MCU firmware.
+ * @brief Main file with integrated mechanical block reception
  */
 
 #include "../lib/main.h"
-
+#include <string.h>  // For memset
 
 // ----------------- Local LCD handle -----------------
 static lcd_i2c_t g_lcd;
+
+// ----------------- Debug/Status Variables -----------------
+volatile uint32_t blocks_processed = 0;
+volatile uint32_t last_interrupt_count = 0;
 
 // ----------------- Simple microsecond delay using SysTick -----------------
 void delay_us(uint32_t us)
@@ -28,7 +32,7 @@ void delay_us(uint32_t us)
     SysTick->CTRL = 0;
 }
 
-// Global millisecond counter (overflows after ~49 days)
+// Global millisecond counter
 volatile uint32_t g_millis = 0;
 
 /**
@@ -38,28 +42,23 @@ void initTIM15_millis(void) {
     RCC->APB2ENR |= RCC_APB2ENR_TIM15EN;
     
     // Assuming 80 MHz system clock
-    // Prescaler = 7999 gives 10 kHz (0.1ms per tick)
-    // ARR = 9 gives interrupt every 1ms
-    TIM15->PSC = 7999;   // (80,000,000 / (7999+1)) = 10,000 Hz
-    TIM15->ARR = 9;      // (10,000 / (9+1)) = 1,000 Hz (1ms)
+    TIM15->PSC = 7999;   // 10 kHz
+    TIM15->ARR = 9;      // 1 kHz (1ms)
     
-    // Enable update interrupt
     TIM15->DIER |= TIM_DIER_UIE;
     
-    // Enable TIM15 interrupt in NVIC
     NVIC_EnableIRQ(TIM1_BRK_TIM15_IRQn);
     NVIC_SetPriority(TIM1_BRK_TIM15_IRQn, 3);
     
-    // Start timer
     TIM15->CR1 |= TIM_CR1_CEN;
 }
 
 /**
- * @brief TIM15 interrupt handler - increments millisecond counter
+ * @brief TIM15 interrupt handler
  */
 void TIM1_BRK_TIM15_IRQHandler(void) {
     if (TIM15->SR & TIM_SR_UIF) {
-        TIM15->SR &= ~TIM_SR_UIF;  // Clear flag
+        TIM15->SR &= ~TIM_SR_UIF;
         g_millis++;
     }
 }
@@ -69,44 +68,14 @@ void TIM1_BRK_TIM15_IRQHandler(void) {
  */
 uint32_t get_millis(void) {
     return g_millis;
-}void demo_progress_bar_nonblocking(void) {
-    static uint32_t last_update = 0;
-    static int block_count = 0;
-    static uint8_t demo_started = 0;
-    
-    // Start demo if not started
-    if (!demo_started) {
-        set_expected_transfer_size(256);
-        lcd_update_transfer_status(&g_lcd, 0, get_total_expected_blocks());
-        demo_started = 1;
-        last_update = get_millis();
-        return;
-    }
-    
-    // Check if 800ms has elapsed
-    uint32_t now = get_millis();
-    if (now - last_update >= 800) {
-        if (block_count < 16) {
-            on_block_received(&g_lcd);
-            block_count++;
-            last_update = now;
-        } else {
-            // Demo complete - reset after 3 seconds
-            if (now - last_update >= 3800) {
-                reset_progress();
-                block_count = 0;
-                demo_started = 0;
-            }
-        }
-    }
 }
 
+/**
+ * @brief Initialize LCD hardware
+ */
 static void lcd_hw_init(void)
 {
-    // Initialize hardware I2C1
     initI2C1();
-    
-    // Initialize LCD using hardware I2C write function
     lcd_init(&g_lcd, 0x27, 20, 4, i2c_write_byte, delay_us);
     lcd_begin(&g_lcd);
     lcd_backlight(&g_lcd);
@@ -114,6 +83,112 @@ static void lcd_hw_init(void)
     lcd_clear(&g_lcd);
     lcd_set_cursor(&g_lcd, 0, 0);
     lcd_update_transfer_status(&g_lcd, 0, 0);
+}
+
+/**
+ * @brief Process received message blocks from mechanical system
+ * Call this in main loop to check for new blocks
+ */
+void process_received_blocks(void) {
+    // Check if a complete block has been received
+    if (messageReceivedFlag) {
+        // Clear flag immediately
+        messageReceivedFlag = 0;
+        
+        // Blink LED to show activity
+        digitalWrite(LED_PIN, 1);
+        
+        // Store the block in webpage storage
+        // Use blocks_processed as the block index
+        receiver_store_block(blocks_processed, (const uint8_t*)receivedMessage);
+        
+        // Update LCD progress
+        on_block_received(&g_lcd);
+        
+        blocks_processed++;
+        
+        // Turn off LED
+        digitalWrite(LED_PIN, 0);
+    }
+}
+
+/**
+ * @brief Display debug info on LCD (for testing)
+ */
+void display_debug_info(void) {
+    static uint32_t last_debug_update = 0;
+    uint32_t now = get_millis();
+    
+    // Update every 500ms
+    if (now - last_debug_update < 500) {
+        return;
+    }
+    last_debug_update = now;
+    
+    char buf[21];
+    
+    // Line 0: Status
+    lcd_set_cursor(&g_lcd, 0, 0);
+    lcd_print(&g_lcd, "MechaCrypt RX Debug ");
+    
+    // Line 1: Interrupt count
+    lcd_set_cursor(&g_lcd, 0, 1);
+    uint32_t isr_count = getInterruptCount();
+    snprintf(buf, sizeof(buf), "ISR: %5lu Blk:%3lu", 
+             (unsigned long)isr_count, 
+             (unsigned long)blocks_processed);
+    lcd_print(&g_lcd, buf);
+    
+    // Line 2: Current byte position
+    lcd_set_cursor(&g_lcd, 0, 2);
+    uint8_t byte_idx = getCurrentByteIndex();
+    uint8_t last_byte = getLastByteValue();
+    snprintf(buf, sizeof(buf), "Pos:%2u Last:0x%02X   ", byte_idx, last_byte);
+    lcd_print(&g_lcd, buf);
+    
+    // Line 3: Change detection
+    lcd_set_cursor(&g_lcd, 0, 3);
+    if (isr_count != last_interrupt_count) {
+        lcd_print(&g_lcd, "RECEIVING...        ");
+        last_interrupt_count = isr_count;
+    } else {
+        lcd_print(&g_lcd, "Idle                ");
+    }
+}
+
+/**
+ * @brief Test mode - display first received byte values
+ */
+void display_test_mode(void) {
+    static uint32_t last_update = 0;
+    uint32_t now = get_millis();
+    
+    if (now - last_update < 1000) return;
+    last_update = now;
+    
+    char buf[21];
+    
+    lcd_set_cursor(&g_lcd, 0, 0);
+    lcd_print(&g_lcd, "Test Mode - Waiting ");
+    
+    lcd_set_cursor(&g_lcd, 0, 1);
+    snprintf(buf, sizeof(buf), "ISR:%lu B:%u       ", 
+             (unsigned long)getInterruptCount(),
+             getCurrentByteIndex());
+    lcd_print(&g_lcd, buf);
+    
+    // Show first 8 bytes of current block
+    lcd_set_cursor(&g_lcd, 0, 2);
+    for (int i = 0; i < 8 && i < MSG_BYTES; i++) {
+        snprintf(buf, 4, "%02X ", receivedMessage[i]);
+        lcd_print(&g_lcd, buf);
+    }
+    
+    lcd_set_cursor(&g_lcd, 0, 3);
+    for (int i = 8; i < 16 && i < MSG_BYTES; i++) {
+        snprintf(buf, 4, "%02X ", receivedMessage[i]);
+        lcd_print(&g_lcd, buf);
+    }
 }
 
 // ----------------- Main entry -----------------
@@ -128,59 +203,80 @@ int main(void)
     gpioEnable(GPIO_PORT_B);
     gpioEnable(GPIO_PORT_C);
 
-    // Status LED (no blinking, just configured in case you want it later)
+    // Status LED
     pinMode(LED_PIN, GPIO_OUTPUT);
+    digitalWrite(LED_PIN, 0);
 
-    // Timer for delay_millis (used elsewhere in project)
+    // Timer for delays
     initTIM(TIM15);
-
     initTIM15_millis();
 
-    // Initiallize USART1 for ESP8266
+    // Initialize USART1 for ESP8266
     USART_TypeDef *USART = initUSART(USART1_ID, 125000);
 
-    // --- Configure USART1 to PB6 (TX) / PB7 (RX) ---
-
-    // Configure PB6/PB7 as alternate function pins
-    pinMode(PB6, GPIO_ALT);
-    pinMode(PB7, GPIO_ALT);
-
-    // Clear existing AF bits for pins 6 and 7
-    GPIOB->AFR[0] &= ~((0xF << GPIO_AFRL_AFSEL6_Pos) |
-                       (0xF << GPIO_AFRL_AFSEL7_Pos));
-
-    // Set AF7 (USART1) for PB6 and PB7
-    GPIOB->AFR[0] |= (0b0111 << GPIO_AFRL_AFSEL6_Pos) |
-                     (0b0111 << GPIO_AFRL_AFSEL7_Pos);
-
-    // Call LCD initialization function
+    // Initialize LCD
     lcd_hw_init();
 
+    // Show startup message
+    lcd_clear(&g_lcd);
+    lcd_set_cursor(&g_lcd, 0, 0);
+    lcd_print(&g_lcd, "MechaCrypt Receiver ");
+    lcd_set_cursor(&g_lcd, 0, 1);
+    lcd_print(&g_lcd, "Initializing...     ");
+    delay_millis(TIM15, 1000);
+
+    // Initialize mechanical message receiver (CRITICAL!)
     initMsgReceive();
 
-    receiver_demo_init_plaintext();  // Sample demo plaintext data for Midpoint check in
+    // Clear demo data and prepare for real reception
+    for (int i = 0; i < MAX_BLOCKS; i++) {
+        memset((void*)received_blocks[i], 0, 16);
+        have_received[i] = 0;
+    }
+    total_received = 0;
 
-    // Initialize SPI for FPGA communication
-    initSPI(0b111, 0, 0);  
-
-    // Chip select pin for FPGA
+    // Initialize SPI for FPGA (for later use)
+    initSPI(0b111, 0, 0);
     pinMode(SPI_CE, GPIO_OUTPUT);
-    digitalWrite(SPI_CE, 1);  // idle high (not selected)
+    digitalWrite(SPI_CE, 1);
 
+    // Ready message
+    lcd_clear(&g_lcd);
+    lcd_set_cursor(&g_lcd, 0, 0);
+    lcd_print(&g_lcd, "Ready to Receive    ");
+    lcd_set_cursor(&g_lcd, 0, 1);
+    lcd_print(&g_lcd, "Blocks: 0           ");
     
-    // Main loop:
-    //  - service HTTP
-    //  - SPI fetches blocks from FPGA
+    // Blink LED to show ready
+    for (int i = 0; i < 3; i++) {
+        digitalWrite(LED_PIN, 1);
+        delay_millis(TIM15, 100);
+        digitalWrite(LED_PIN, 0);
+        delay_millis(TIM15, 100);
+    }
+
+    // Main loop
     while (1) {
+        // Process any received blocks from mechanical system
+        process_received_blocks();
+        
+        // Service HTTP requests from ESP8266
         processWebRequest(USART);
-
-        // receiver_spi_demo_poll(); // Uncomment to enable SPI fetching
-        demo_progress_bar_nonblocking();
-
-        if (get_received_block_count() >= get_total_expected_blocks() && get_total_expected_blocks() > 0) {
-            // All blocks received
-            lcd_set_cursor(&g_lcd, 0, 3);
-            lcd_print(&g_lcd, "Transfer Complete!   ");
-        }
+        
+        // Display debug info on LCD
+        // Choose one of these display modes:
+        
+        // Option 1: Debug mode - shows raw ISR counts and byte values
+        display_debug_info();
+        
+        // Option 2: Test mode - shows received bytes in hex
+        // display_test_mode();
+        
+        // Option 3: Progress mode - shows transfer progress
+        // lcd_update_transfer_status(&g_lcd, blocks_processed, 
+        //                           get_total_expected_blocks());
+        
+        // Small delay to prevent overwhelming the LCD
+        delay_millis(TIM15, 10);
     }
 }

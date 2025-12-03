@@ -1,24 +1,36 @@
 /**
  * @file msgReceive.c
- * @author Josaphat Ngoga
- * @date  19/11/2025
- * @brief Reads the bit transfer lines from the switches and recods the full byte as received. It is ISR driven where it
- * triggers on the rising edge of the transfre clk line (tx_clk) stores them and sets a flag when 16 bytes (128 bits) are received.
-*/
+ * @author Josaphat Ngoga / Christian Wu
+ * @date  2025-11-19
+ * @brief Enhanced message reception with debouncing
+ */
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include "../lib/STM32L432KC.h"
 #include "../lib/msgReceive.h"
+#include "../lib/webpage.h"
+#include "../lib/lcd_progress.h"
 
 // Variables
-volatile uint8_t receivedMessage[MSG_BYTES]; // Arraty to store received message
-volatile uint8_t messageReceivedFlag = 0;    // Initialize flag
-volatile uint8_t msgIndex;                   // Byte counter
+volatile uint8_t receivedMessage[MSG_BYTES];
+volatile uint8_t messageReceivedFlag = 0;
+volatile uint8_t msgIndex = 0;
+volatile uint32_t totalBlocksReceived = 0;
+
+// Debug counters
+volatile uint32_t interrupt_count = 0;
+volatile uint32_t debounced_count = 0;  // Count after debouncing
+volatile uint32_t rejected_count = 0;   // Count of rejected (too fast) interrupts
+volatile uint32_t last_byte_value = 0;
+
+// Debouncing state
+volatile uint32_t last_interrupt_time = 0;  // Using systick or timer
+#define DEBOUNCE_TIME_US 10000  // 1ms debounce (adjust based on testing)
 
 // Initialize the receiver GPIO pins and interrupt
 void initMsgReceive(void) {
-
     // Configure GPIO inputs
     pinMode(BIT_0, GPIO_INPUT);
     pinMode(BIT_1, GPIO_INPUT);
@@ -29,68 +41,133 @@ void initMsgReceive(void) {
     pinMode(BIT_6, GPIO_INPUT);
     pinMode(BIT_7, GPIO_INPUT);
 
-    // Configure TX_CLK 
+    // Configure TX_CLK input
     pinMode(TX_CLK, GPIO_INPUT);
 
-    // Initialize signals
+    // Initialize counters
     msgIndex = 0;
     messageReceivedFlag = 0;
-
+    totalBlocksReceived = 0;
+    interrupt_count = 0;
+    debounced_count = 0;
+    rejected_count = 0;
+    last_interrupt_time = 0;
 
     ////////////// Enable interrupts /////////////////
 
     // Enable SYSCFG clock
     RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
     
-    // Configure EXTICR for PA6
-    SYSCFG->EXTICR[1] &= ~SYSCFG_EXTICR2_EXTI6_Msk; // Clear EXTI6 bits
-    SYSCFG->EXTICR[1] |= _VAL2FLD(SYSCFG_EXTICR2_EXTI6, 0b0000); 
+    // Configure EXTICR for PA0 (TX_CLK)
+    SYSCFG->EXTICR[0] &= ~SYSCFG_EXTICR1_EXTI0_Msk;
+    SYSCFG->EXTICR[0] |= _VAL2FLD(SYSCFG_EXTICR1_EXTI0, 0b0000);
     
-    // Configure EXTI line 6 for rising edge trigger
-    EXTI->IMR1  |= EXTI_IMR1_IM6;   // Unmask EXTI6
-    EXTI->RTSR1 |= EXTI_RTSR1_RT6;  // Rising edge trigger
-    EXTI->FTSR1 &= ~EXTI_FTSR1_FT6; // Disable falling edge trigger
+    // Configure EXTI line 0 for rising edge trigger ONLY
+    EXTI->IMR1  |= EXTI_IMR1_IM0;     // Unmask EXTI0
+    EXTI->RTSR1 |= EXTI_RTSR1_RT0;    // Rising edge trigger
+    EXTI->FTSR1 &= ~EXTI_FTSR1_FT0;   // Disable falling edge (important!)
     
-    // Enable NVIC IRQ for EXTI6
-    NVIC_EnableIRQ(EXTI9_5_IRQn);
+    // Enable NVIC IRQ for EXTI0
+    NVIC_EnableIRQ(EXTI0_IRQn);
+    NVIC_SetPriority(EXTI0_IRQn, 1);  // Higher priority (lower number)
+    
     // Global interrupt enable
     __enable_irq();
-    
 }
 
-// ISR handler for message receiving
+// Simple microsecond timestamp (wraps every ~4s at 80MHz)
+static inline uint32_t get_us_timestamp(void) {
+    // Using DWT cycle counter (if available)
+    // Or use a dedicated timer - for now, use a simple approximation
+    return DWT->CYCCNT / 80;  // 80 MHz / 80 = 1 MHz = 1us
+}
+
+// ISR handler for message receiving with debouncing
 void msgReceiveISR(void) {
-    // Configure GPIO IDR for faster reading
+    interrupt_count++;
+    
+    // Software debouncing: ignore interrupts that come too quickly
+    uint32_t now = get_us_timestamp();
+    uint32_t time_since_last = now - last_interrupt_time;
+    
+    // If less than DEBOUNCE_TIME_US has passed, ignore this interrupt
+    if (time_since_last < DEBOUNCE_TIME_US && last_interrupt_time != 0) {
+        rejected_count++;
+        return;  // Ignore this bounce
+    }
+    
+    last_interrupt_time = now;
+    debounced_count++;
+    
+    // Read all GPIO Port A pins at once for speed
     uint32_t bitInput = GPIOA->IDR;
 
-    // Read bits from GPIO pins
+    // Reconstruct the byte from the 8 bit lines
     uint8_t byteReceived = 0;
     
-    byteReceived |= ((bitInput >> 0)  & 1) << 0;
-    byteReceived |= ((bitInput >> 1)  & 1) << 1;
-    byteReceived |= ((bitInput >> 2)  & 1) << 2;
-    byteReceived |= ((bitInput >> 3)  & 1) << 3;
-    byteReceived |= ((bitInput >> 4)  & 1) << 4;
-    byteReceived |= ((bitInput >> 5)  & 1) << 5;
-    byteReceived |= ((bitInput >> 7)  & 1) << 6;
-    byteReceived |= ((bitInput >> 12) & 1) << 7;
+    byteReceived |= ((GPIOA->IDR >> 7) & 1) << 0;   // PA7  -> bit 0 ✓
+    byteReceived |= ((GPIOA->IDR >> 6) & 1) << 1;   // PA6  -> bit 1 ✓
+    byteReceived |= ((GPIOA->IDR >> 3) & 1) << 2;   // PA3  -> bit 2 ✓
+    byteReceived |= ((GPIOA->IDR >> 1) & 1) << 3;   // PA1  -> bit 3 ✓
+    byteReceived |= ((GPIOA->IDR >> 0) & 1) << 4;   // PA0  -> bit 4 ✓
+    byteReceived |= ((GPIOB->IDR >> 1) & 1) << 5;   // PB1  -> bit 5 ✓
+    byteReceived |= ((GPIOC->IDR >> 14) & 1) << 6;  // PC14 -> bit 6 ✓
+    byteReceived |= ((GPIOC->IDR >> 15) & 1) << 7;  // PC15 -> bit 7 ✓
+
+    last_byte_value = byteReceived;
 
     // Store received byte
     receivedMessage[msgIndex++] = byteReceived;
 
-    // Check if full message received
+    // Check if full 16-byte block received
     if (msgIndex >= MSG_BYTES) {
-        messageReceivedFlag = 1; // Set flag
-        msgIndex = 0;            // Reset index for next message
+        messageReceivedFlag = 1;
+        msgIndex = 0;
+        totalBlocksReceived++;
     }
 }
 
-// EXTI line[9:5] Interrupt Handler
-void EXTI9_5_IRQHandler(void) {
-
-    // Check if EXTI6 triggered the interrupt
-    if (EXTI->PR1 & EXTI_PR1_PIF6) {
-        EXTI->PR1 |= EXTI_PR1_PIF6; // Clear the interrupt
-        msgReceiveISR();            // Read message bits
+// EXTI line 0 Interrupt Handler (PA0 = TX_CLK)
+void EXTI0_IRQHandler(void) {
+    // Check if EXTI0 triggered the interrupt
+    if (EXTI->PR1 & EXTI_PR1_PIF0) {
+        EXTI->PR1 |= EXTI_PR1_PIF0;  // Clear the interrupt flag IMMEDIATELY
+        msgReceiveISR();
     }
+}
+
+// Helper functions
+uint32_t getTotalBlocksReceived(void) {
+    return totalBlocksReceived;
+}
+
+uint8_t getCurrentByteIndex(void) {
+    return msgIndex;
+}
+
+uint32_t getInterruptCount(void) {
+    return interrupt_count;
+}
+
+uint32_t getDebouncedCount(void) {
+    return debounced_count;
+}
+
+uint32_t getRejectedCount(void) {
+    return rejected_count;
+}
+
+uint8_t getLastByteValue(void) {
+    return (uint8_t)last_byte_value;
+}
+
+void resetMsgReceive(void) {
+    msgIndex = 0;
+    messageReceivedFlag = 0;
+    totalBlocksReceived = 0;
+    interrupt_count = 0;
+    debounced_count = 0;
+    rejected_count = 0;
+    last_interrupt_time = 0;
+    memset((void*)receivedMessage, 0, MSG_BYTES);
 }

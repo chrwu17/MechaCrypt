@@ -84,6 +84,6 @@ uint16_t get_total_expected_blocks(void);
 /**
  * @brief Reset progress counters to zero
  */
-void reset_progress(void);
+void reset_progress(lcd_i2c_t *lcd);
 
 #endif // LCD_PROGRESS_H
