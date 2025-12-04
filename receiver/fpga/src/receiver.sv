@@ -1,11 +1,12 @@
 // Josaphat Ngoga
 // jngoga@g.hmc.edu
-// 12/1/2025
+// Modified: 12/4/2025
 
 ////////////////////////////////////////////////////////////
 // receiver.sv()
 //      Top-level receiver module that integrates message reception from mechanical actuators,
 //      AES decryption, and SPI communication with MCU.
+//      Now receives both ciphertext and key (32 bytes total).
 ////////////////////////////////////////////////////////////
 
 module receiver (
@@ -43,26 +44,28 @@ module receiver (
     end
 
     // Message reception signals
-    logic [127:0] received_msg;
+    logic [127:0] received_ciphertext;
+    logic [127:0] received_key;
     logic msg_done;
 
-    // Message Reception Module (receives 128-bit encrypted message from mechanical actuators)
+    // Message Reception Module (receives 256-bit message: ciphertext + key from mechanical actuators)
     msg_receive #(
-        .TOTAL_BYTES(16)        // 128 bits = 16 bytes
+        .TOTAL_BYTES(32)        // 256 bits = 32 bytes (16 ciphertext + 16 key)
     ) msg_receiver (
-        .clk      (clk),
-        .reset    (reset),
-        .tx_clk   (tx_clk),
-        .data_in  (data_in),
+        .clk        (clk),
+        .reset      (reset),
+        .tx_clk     (tx_clk),
+        .data_in    (data_in),
         
         // SPI interface for sending received message to MCU
-        .sck      (sck),
-        .cs       (cs_msg),
-        .sdo      (sdo_msg),
+        .sck        (sck),
+        .cs         (cs_msg),
+        .sdo        (sdo_msg),
         
-        .msg_out  (received_msg),
-        .done     (msg_done),
-        .ready    (msg_ready)
+        .ciphertext (received_ciphertext),
+        .key        (received_key),
+        .done       (msg_done),
+        .ready      (msg_ready)
     );
 
     // AES Decryption Module (receives key + ciphertext from MCU via SPI, outputs plaintext)

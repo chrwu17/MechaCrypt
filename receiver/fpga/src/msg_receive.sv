@@ -1,18 +1,18 @@
 // Josaphat Ngoga
 // jngoga@g.hmc.edu
-// 11/6/2025
+// Modified: 12/4/2025
 
 //////////////////////////////////////////////////////////// 
 // msg_receive() 
 //   Receives 8-bit data bytes synchronized to a slower transfer clock (tx_clk) from the sender module,
-//   and reconstructs them into a 128-bit output message (16 bytes).
+//   and reconstructs them into 256-bit output (ciphertext + key, 32 bytes).
 //   It is meant to receive data from the activated limit switches of the MechaCrypt system.
 //   
 //   Added SPI output capability to shift the reconstructed message to an MCU.
 ////////////////////////////////////////////////////////////
 
 module msg_receive #(
-    parameter TOTAL_BYTES = 16    // total bytes expected (for 128-bit word)
+    parameter TOTAL_BYTES = 32    // total bytes expected (16 for ciphertext + 16 for key)
     )(
     input  logic         clk,     // FPGA system clock
     input  logic         reset,
@@ -24,9 +24,10 @@ module msg_receive #(
     input  logic         cs,      // MCU chip select (active low)
     output logic         sdo,     // MCU MISO
     
-    output logic [127:0] msg_out, // reconstructed 128-bit array
-    output logic         done,    // high when full array received
-    output logic         ready);  // high when ready to send to MCU
+    output logic [127:0] ciphertext, // reconstructed ciphertext (first 16 bytes)
+    output logic [127:0] key,        // reconstructed key (last 16 bytes)
+    output logic         done,       // high when full array received
+    output logic         ready);     // high when ready to send to MCU
 
     // Sync tx_clk to FPGA clk domain
     logic tx_clk_sync_0, tx_clk_sync_1;
@@ -44,9 +45,9 @@ module msg_receive #(
     logic tx_clk_rise;
     assign tx_clk_rise = (tx_clk_sync_0 && !tx_clk_sync_1);
 
-    // Assemble received bytes into 128-bit msg_out
-    logic [3:0] idx;
-    logic [127:0] buffer;
+    // Assemble received bytes into 256-bit buffer
+    logic [4:0] idx;  // 5 bits to count 0-31
+    logic [255:0] buffer;
     logic receiving;
 
     always_ff @(posedge clk or negedge reset) begin
@@ -61,8 +62,8 @@ module msg_receive #(
                 receiving <= 1'b1;
                 done      <= 1'b0;
 
-                // shift received byte into buffer
-                buffer <= {buffer[119:0], data_in};
+                // shift received byte into buffer (LSB side)
+                buffer <= {buffer[247:0], data_in};
 
                 if (idx == (TOTAL_BYTES - 1)) begin
                     done       <= 1'b1;
@@ -75,11 +76,13 @@ module msg_receive #(
         end
     end
 
-    // Output the reconstructed message
-    assign msg_out = buffer;
+    // Split buffer into ciphertext (upper 128 bits) and key (lower 128 bits)
+    assign ciphertext = buffer[255:128];
+    assign key        = buffer[127:0];
 
     // ========== SPI Output Logic ==========
-    logic [127:0] shiftOut;
+    // Send the complete 256-bit message (ciphertext + key) via SPI
+    logic [255:0] shiftOut;
     logic         sending;
     logic         sdo_next;
     logic         done_prev;
@@ -126,7 +129,7 @@ module msg_receive #(
         if (!reset) begin
             done_prev <= 1'b0;
             sending   <= 1'b0;
-            shiftOut  <= 128'd0;
+            shiftOut  <= 256'd0;
             sdo_next  <= 1'b0;
         end 
         else begin
@@ -137,7 +140,7 @@ module msg_receive #(
             if (done && !done_prev) begin
                 sending  <= 1'b1;
                 shiftOut <= buffer;
-                sdo_next <= buffer[127]; // Load first bit immediately
+                sdo_next <= buffer[255]; // Load first bit immediately
             end
             
             // Reset only when CS goes high AND we were actively sending
@@ -148,8 +151,8 @@ module msg_receive #(
             
             // Shift data on rising edge of sck
             if (sck_rise && sending && !cs_sync_1) begin
-                shiftOut <= {shiftOut[126:0], 1'b0};
-                sdo_next <= shiftOut[126]; // Output next bit (before shift completes)
+                shiftOut <= {shiftOut[254:0], 1'b0};
+                sdo_next <= shiftOut[254]; // Output next bit (before shift completes)
             end
         end
     end
