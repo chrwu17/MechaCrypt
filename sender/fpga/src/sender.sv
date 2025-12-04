@@ -27,6 +27,7 @@ module sender (
     // AES Encryption Module
     // logic done;
     logic [127:0] ciphertext;
+    logic [127:0] key;
 
     aesEncryption encrypt (
         .clk        (clk),
@@ -37,6 +38,7 @@ module sender (
 		// .led_test (led_test),
         .sdo        (sdo),
         .cyphertext (ciphertext),
+        .key        (key),
         .done       (done)
     );
         
@@ -67,13 +69,14 @@ module sender (
 
     // Message Sending Module
     msgSend send (
-        .clk       (clk),
-        .reset     (reset),
-        .start     (read_done),
-        .msg_in    (cipher_out),
-        .msg_out   (msg_out),
-        .tx_clk    (tx_clk),
-        .send_done (send_done)
+        .clk        (clk),
+        .reset      (reset),
+        .start      (read_done),
+        .ciphertext (cipher_out),
+        .key        (key),
+        .msg_out    (msg_out),
+        .tx_clk     (tx_clk),
+        .send_done  (send_done)
     );
     
 endmodule

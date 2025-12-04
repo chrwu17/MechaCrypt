@@ -17,9 +17,10 @@ module aesEncryption(input  logic clk,
 					// output logic led_test,
                      output logic sdo,
                      output logic [127:0] cyphertext,
+                     output logic [127:0] key,
                      output logic done);
 
-    logic [127:0] key, plaintext;
+    logic [127:0] plaintext;
     
     // Synchronize load signal to the clk instead of sck
     logic load_meta, load_sync;

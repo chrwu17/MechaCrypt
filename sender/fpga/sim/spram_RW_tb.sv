@@ -65,10 +65,11 @@ module spram_RW_tb;
         $display("[%0t] Read complete.", $time);
 
         // Compare results
-        if (cipher_out === ciphertext)
+        if (cipher_out === ciphertext)  begin
             $display("All tests pass!");
             $display("Expected: %h", ciphertext);
             $display("Received: %h", cipher_out);
+        end
         else begin
             $error("Testbench failed!");
             $display("Expected: %h", ciphertext);

@@ -1,10 +1,12 @@
 // Josaphat Ngoga
 // jngoga@g.hmc.edu
-// 11/5/2025
+// 12/4/2025
+
 //////////////////////////////////////////////////////////// 
 // msgSend() 
-//      Takes in a 128-bit input (16 bytes) and sends it out one byte at a time over a parallel 8-bit output,
-//      synchronized to a slower transfer clk (tx_clk) that is also sent alongside the data. 
+//      Takes in two 128-bit inputs (ciphertext and key, 32 bytes total) and sends them out 
+//      one byte at a time over a parallel 8-bit output, synchronized to a slower transfer 
+//      clk (tx_clk) that is also sent alongside the data. 
 //      It is meant to drive the mechanical actuators of the MechaCrypt system.
 ////////////////////////////////////////////////////////////
 module msgSend #(
@@ -14,7 +16,8 @@ module msgSend #(
     input  logic         clk,
     input  logic         reset,
     input  logic         start,       // signal to start sending message
-    input  logic [127:0] msg_in,      // 128-bit input message to send
+    input  logic [127:0] ciphertext,  // 128-bit ciphertext to send
+    input  logic [127:0] key,         // 128-bit key to send
     output logic [7:0]   msg_out,     // 8-bit output message (one byte at a time)
     output logic         tx_clk,      // transfer clock output
     output logic         send_done);  // signal indicating message has been fully sent  
@@ -27,9 +30,13 @@ module msgSend #(
     logic tx_clk_falling;
     
     // Byte sending control logic
-    logic [4:0] idx; // Byte index in msg_in (0 to 15)
+    logic [5:0] idx; // Byte index (0 to 31 for 32 bytes total)
     logic sending;  
-    logic [7:0] msg_out_raw;      // Raw byte from msg_in
+    logic [7:0] msg_out_raw;      // Raw byte from combined message
+    
+    // Combine ciphertext and key into one 256-bit message
+    logic [255:0] msg_combined;
+    assign msg_combined = {ciphertext, key}; // Ciphertext in upper 128 bits, key in lower 128 bits
     
     // Clock generation - only toggle when sending
     always_ff @(posedge clk or negedge reset) begin
@@ -74,7 +81,7 @@ module msgSend #(
             send_done  <= 0;
         end else if (sending && tx_clk_rising) begin
             // advance on each tx_clk rising edge
-            if (idx == 16) begin
+            if (idx == 32) begin
                 idx        <= 0;
                 sending    <= 0;
                 send_done  <= 1;
@@ -84,25 +91,45 @@ module msgSend #(
         end
     end
     
-    // Iteratively select the appropriate byte from msg_in
+    // Iteratively select the appropriate byte from msg_combined
     always_comb begin
         case (idx)
-            4'd0:  msg_out_raw = msg_in[127:120];
-            4'd1:  msg_out_raw = msg_in[119:112];
-            4'd2:  msg_out_raw = msg_in[111:104];
-            4'd3:  msg_out_raw = msg_in[103:96];
-            4'd4:  msg_out_raw = msg_in[95:88];
-            4'd5:  msg_out_raw = msg_in[87:80];
-            4'd6:  msg_out_raw = msg_in[79:72];
-            4'd7:  msg_out_raw = msg_in[71:64];
-            4'd8:  msg_out_raw = msg_in[63:56];
-            4'd9:  msg_out_raw = msg_in[55:48];
-            4'd10: msg_out_raw = msg_in[47:40];
-            4'd11: msg_out_raw = msg_in[39:32];
-            4'd12: msg_out_raw = msg_in[31:24];
-            4'd13: msg_out_raw = msg_in[23:16];
-            4'd14: msg_out_raw = msg_in[15:8];
-            4'd15: msg_out_raw = msg_in[7:0];
+            // Ciphertext bytes (0-15)
+            5'd0:  msg_out_raw = msg_combined[255:248];
+            5'd1:  msg_out_raw = msg_combined[247:240];
+            5'd2:  msg_out_raw = msg_combined[239:232];
+            5'd3:  msg_out_raw = msg_combined[231:224];
+            5'd4:  msg_out_raw = msg_combined[223:216];
+            5'd5:  msg_out_raw = msg_combined[215:208];
+            5'd6:  msg_out_raw = msg_combined[207:200];
+            5'd7:  msg_out_raw = msg_combined[199:192];
+            5'd8:  msg_out_raw = msg_combined[191:184];
+            5'd9:  msg_out_raw = msg_combined[183:176];
+            5'd10: msg_out_raw = msg_combined[175:168];
+            5'd11: msg_out_raw = msg_combined[167:160];
+            5'd12: msg_out_raw = msg_combined[159:152];
+            5'd13: msg_out_raw = msg_combined[151:144];
+            5'd14: msg_out_raw = msg_combined[143:136];
+            5'd15: msg_out_raw = msg_combined[135:128];
+            
+            // Key bytes (16-31)
+            5'd16: msg_out_raw = msg_combined[127:120];
+            5'd17: msg_out_raw = msg_combined[119:112];
+            5'd18: msg_out_raw = msg_combined[111:104];
+            5'd19: msg_out_raw = msg_combined[103:96];
+            5'd20: msg_out_raw = msg_combined[95:88];
+            5'd21: msg_out_raw = msg_combined[87:80];
+            5'd22: msg_out_raw = msg_combined[79:72];
+            5'd23: msg_out_raw = msg_combined[71:64];
+            5'd24: msg_out_raw = msg_combined[63:56];
+            5'd25: msg_out_raw = msg_combined[55:48];
+            5'd26: msg_out_raw = msg_combined[47:40];
+            5'd27: msg_out_raw = msg_combined[39:32];
+            5'd28: msg_out_raw = msg_combined[31:24];
+            5'd29: msg_out_raw = msg_combined[23:16];
+            5'd30: msg_out_raw = msg_combined[15:8];
+            5'd31: msg_out_raw = msg_combined[7:0];
+            
             default: msg_out_raw = 8'h00;
         endcase
     end
@@ -114,7 +141,7 @@ module msgSend #(
         end else if (tx_clk_rising) begin
             msg_out <= msg_out_raw;  // Load new byte on rising edge
         end else if (tx_clk_falling) begin
-            msg_out <= 8'h00;        // Clear output on falling edge (creates the "blink")
+            msg_out <= 8'h00;        // Clear output on falling edge
         end
     end
     
