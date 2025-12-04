@@ -4,57 +4,78 @@
 
 ////////////////////////////////////////////////////////////
 // receiver.sv()
-//      Top-level receiver module that integrates AES encryption, SPRAM storage, and message sending.
+//      Top-level receiver module that integrates message reception from mechanical actuators,
+//      AES decryption, and SPI communication with MCU.
 ////////////////////////////////////////////////////////////
 
 module receiver (
-    // Bridge SPI (MCU1 -> FPGA) for receiving key and message length
-    //input  logic sck_1,          // MCU1 SPI clock
-    //input  logic sdi_1,          // MCU1 MOSI (key + length input)
-    //input  logic cs_1,           // MCU1 CS
+    // Message reception from mechanical actuators
+    input  logic         tx_clk,         // Transfer clock from sender (slow)
+    input  logic [7:0]   data_in,        // 8 parallel data lines from limit switches
     
-    // Decryption SPI (MCU2 <-> FPGA) for ciphertext in / plaintext out
-    input  logic sck_2,          // MCU2 SPI clock
-    input  logic sdi_2,          // MCU2 MOSI (ciphertext input)
-    input  logic cs_2,           // MCU2 CS
-    input  logic load,           // MCU2 load signal to start decryption
-    output logic sdo_2,          // MCU2 MISO (key, message length, and plaintext output)
+    // SPI interface with MCU for key/ciphertext input and plaintext output
+    input  logic sck,                    // MCU SPI clock
+    input  logic sdi,                    // MCU MOSI (key + ciphertext input)
+    input  logic cs_msg,                 // MCU CS for message readout
+    input  logic cs_decrypt,             // MCU CS for decryption
+    input  logic load_decrypt,           // MCU load signal to start decryption
+    output logic sdo_msg,                // MCU MISO for message readout
+    output logic sdo_decrypt,            // MCU MISO for decryption
     
     // Status outputs
-    //output logic bridge_ready,    // Bridge has received key/length, ready for decryption
-    output logic done_decrypt,   // Decryption complete signal
+    output logic msg_ready,              // Message received and ready to send via SPI
+    output logic done_decrypt,           // Decryption complete signal
     output logic led1,
     output logic led2
-
 );
 
     // Internal high-speed oscillator
     logic clk;
+    logic reset;
     HSOSC #(.CLKHF_DIV(2'b11)) 
           hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 24 MHz
 
-    // Bridge signals (receives key and message length from MCU1)    
-    //bridge keyBridge (
-        //.sck_in  (sck_1),
-        //.sdi     (sdi_1),
-        //.cs_in   (cs_1),
-        //.sck_out (sck_2),          
-        //.cs_out  (cs_2),           
-        //.sdo     (sdo_2),          
-        //.ready   (bridge_ready)
-    //);
-    
-    // AES Decryption Module (receives ciphertext from MCU2 via SPI, outputs plaintext)
+    // Generate reset signal
+    initial begin
+        reset = 1'b0;
+        #100;
+        reset = 1'b1;
+    end
+
+    // Message reception signals
+    logic [127:0] received_msg;
+    logic msg_done;
+
+    // Message Reception Module (receives 128-bit encrypted message from mechanical actuators)
+    msg_receive #(
+        .TOTAL_BYTES(16)        // 128 bits = 16 bytes
+    ) msg_receiver (
+        .clk      (clk),
+        .reset    (reset),
+        .tx_clk   (tx_clk),
+        .data_in  (data_in),
+        
+        // SPI interface for sending received message to MCU
+        .sck      (sck),
+        .cs       (cs_msg),
+        .sdo      (sdo_msg),
+        
+        .msg_out  (received_msg),
+        .done     (msg_done),
+        .ready    (msg_ready)
+    );
+
+    // AES Decryption Module (receives key + ciphertext from MCU via SPI, outputs plaintext)
     aesDecryption decrypt (
         .clk          (clk),
-        .sck          (sck_2),
-        .sdi          (sdi_2),
-        .cs           (cs_2),  
-        .load         (load),   
-        .sdo          (sdo_2),  
+        .sck          (sck),
+        .sdi          (sdi),
+        .cs           (cs_decrypt),  
+        .load         (load_decrypt),   
+        .sdo          (sdo_decrypt),  
         .done_decrypt (done_decrypt),
-        .led1 (led1),
-        .led2 (led2)
+        .led1         (led1),
+        .led2         (led2)
     );
 
 endmodule
