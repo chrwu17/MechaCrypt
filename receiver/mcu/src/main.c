@@ -2,18 +2,14 @@
  * @file main.c
  * @author Christian Wu
  * @date 2025-11-19
- * @brief Main file with integrated mechanical block reception
+ * @brief Main file for MechaCrypt receiver MCU firmware.
  */
 
 #include "../lib/main.h"
-#include <string.h>  // For memset
+
 
 // ----------------- Local LCD handle -----------------
 static lcd_i2c_t g_lcd;
-
-// ----------------- Debug/Status Variables -----------------
-volatile uint32_t blocks_processed = 0;
-volatile uint32_t last_interrupt_count = 0;
 
 // ----------------- Simple microsecond delay using SysTick -----------------
 void delay_us(uint32_t us)
@@ -32,7 +28,61 @@ void delay_us(uint32_t us)
     SysTick->CTRL = 0;
 }
 
-// Global millisecond counter
+// Add to your initialization, BEFORE starting reception
+void verify_pulldowns(void) {
+    printf("\r\n=== Verifying Pull-downs ===\r\n");
+    
+    delay_millis(TIM15, 100);  // Let pins settle
+    
+    uint32_t porta = GPIOA->IDR;
+    uint32_t portb = GPIOB->IDR;
+    uint32_t portc = GPIOC->IDR;
+    
+    printf("BIT_0 (PA7): %d %s\r\n", (porta >> 7) & 1, 
+           ((porta >> 7) & 1) ? "FAIL - should be LOW" : "OK");
+    printf("BIT_1 (PA4): %d %s\r\n", (porta >> 4) & 1,
+           ((porta >> 4) & 1) ? "FAIL - should be LOW" : "OK");
+    printf("BIT_2 (PA3): %d %s\r\n", (porta >> 3) & 1,
+           ((porta >> 3) & 1) ? "FAIL - should be LOW" : "OK");
+    printf("BIT_3 (PA1): %d %s\r\n", (porta >> 1) & 1,
+           ((porta >> 1) & 1) ? "FAIL - should be LOW" : "OK");
+    printf("BIT_4 (PA0): %d %s\r\n", (porta >> 0) & 1,
+           ((porta >> 0) & 1) ? "FAIL - should be LOW" : "OK");
+    printf("BIT_5 (PB1): %d %s\r\n", (portb >> 1) & 1,
+           ((portb >> 1) & 1) ? "FAIL - should be LOW" : "OK");
+    printf("BIT_6 (PC14): %d %s\r\n", (portc >> 14) & 1,
+           ((portc >> 14) & 1) ? "FAIL - should be LOW" : "OK");
+    printf("BIT_7 (PC15): %d %s\r\n", (portc >> 15) & 1,
+           ((portc >> 15) & 1) ? "FAIL - should be LOW" : "OK");
+}
+
+void check_pc14_pc15(void) {
+    printf("\r\n=== Checking PC14/PC15 Configuration ===\r\n");
+    
+    // Check if LSE is enabled
+    if (RCC->BDCR & RCC_BDCR_LSEON) {
+        printf("WARNING: LSE oscillator is enabled!\r\n");
+        printf("PC14/PC15 are being used by the 32kHz crystal.\r\n");
+        printf("These pins are NOT available as GPIO!\r\n");
+    }
+    
+    // Check GPIO mode
+    uint32_t moder = GPIOC->MODER;
+    printf("PC14 mode: 0x%lx (should be 0x0 for input)\r\n", (moder >> 28) & 0x3);
+    printf("PC15 mode: 0x%lx (should be 0x0 for input)\r\n", (moder >> 30) & 0x3);
+    
+    // Check pull-up/pull-down
+    uint32_t pupdr = GPIOC->PUPDR;
+    printf("PC14 PUPDR: 0x%lx (should be 0x2 for pull-down)\r\n", (pupdr >> 28) & 0x3);
+    printf("PC15 PUPDR: 0x%lx (should be 0x2 for pull-down)\r\n", (pupdr >> 30) & 0x3);
+    
+    // Try to read current state
+    uint32_t idr = GPIOC->IDR;
+    printf("PC14 state: %ld\r\n", (idr >> 14) & 1);
+    printf("PC15 state: %ld\r\n", (idr >> 15) & 1);
+}
+
+// Global millisecond counter (overflows after ~49 days)
 volatile uint32_t g_millis = 0;
 
 /**
@@ -42,23 +92,28 @@ void initTIM15_millis(void) {
     RCC->APB2ENR |= RCC_APB2ENR_TIM15EN;
     
     // Assuming 80 MHz system clock
-    TIM15->PSC = 7999;   // 10 kHz
-    TIM15->ARR = 9;      // 1 kHz (1ms)
+    // Prescaler = 7999 gives 10 kHz (0.1ms per tick)
+    // ARR = 9 gives interrupt every 1ms
+    TIM15->PSC = 7999;   // (80,000,000 / (7999+1)) = 10,000 Hz
+    TIM15->ARR = 9;      // (10,000 / (9+1)) = 1,000 Hz (1ms)
     
+    // Enable update interrupt
     TIM15->DIER |= TIM_DIER_UIE;
     
+    // Enable TIM15 interrupt in NVIC
     NVIC_EnableIRQ(TIM1_BRK_TIM15_IRQn);
     NVIC_SetPriority(TIM1_BRK_TIM15_IRQn, 3);
     
+    // Start timer
     TIM15->CR1 |= TIM_CR1_CEN;
 }
 
 /**
- * @brief TIM15 interrupt handler
+ * @brief TIM15 interrupt handler - increments millisecond counter
  */
 void TIM1_BRK_TIM15_IRQHandler(void) {
     if (TIM15->SR & TIM_SR_UIF) {
-        TIM15->SR &= ~TIM_SR_UIF;
+        TIM15->SR &= ~TIM_SR_UIF;  // Clear flag
         g_millis++;
     }
 }
@@ -68,14 +123,44 @@ void TIM1_BRK_TIM15_IRQHandler(void) {
  */
 uint32_t get_millis(void) {
     return g_millis;
+}void demo_progress_bar_nonblocking(void) {
+    static uint32_t last_update = 0;
+    static int block_count = 0;
+    static uint8_t demo_started = 0;
+    
+    // Start demo if not started
+    if (!demo_started) {
+        set_expected_transfer_size(256);
+        lcd_update_transfer_status(&g_lcd, 0, get_total_expected_blocks());
+        demo_started = 1;
+        last_update = get_millis();
+        return;
+    }
+    
+    // Check if 800ms has elapsed
+    uint32_t now = get_millis();
+    if (now - last_update >= 800) {
+        if (block_count < 16) {
+            on_block_received(&g_lcd);
+            block_count++;
+            last_update = now;
+        } else {
+            // Demo complete - reset after 3 seconds
+            if (now - last_update >= 3800) {
+                reset_progress(&g_lcd);
+                block_count = 0;
+                demo_started = 0;
+            }
+        }
+    }
 }
 
-/**
- * @brief Initialize LCD hardware
- */
 static void lcd_hw_init(void)
 {
+    // Initialize hardware I2C1
     initI2C1();
+    
+    // Initialize LCD using hardware I2C write function
     lcd_init(&g_lcd, 0x27, 20, 4, i2c_write_byte, delay_us);
     lcd_begin(&g_lcd);
     lcd_backlight(&g_lcd);
@@ -85,206 +170,9 @@ static void lcd_hw_init(void)
     lcd_update_transfer_status(&g_lcd, 0, 0);
 }
 
-/**
- * @brief Display debug info on LCD (for testing)
- */
-void display_debug_info(void) {
-    static uint32_t last_debug_update = 0;
-    uint32_t now = get_millis();
-    
-    // Update every 500ms
-    if (now - last_debug_update < 500) {
-        return;
-    }
-    last_debug_update = now;
-    
-    char buf[21];
-    
-    // Line 0: Status
-    lcd_set_cursor(&g_lcd, 0, 0);
-    lcd_print(&g_lcd, "MechaCrypt RX Debug ");
-    
-    // Line 1: Interrupt count
-    lcd_set_cursor(&g_lcd, 0, 1);
-    uint32_t isr_count = getInterruptCount();
-    snprintf(buf, sizeof(buf), "ISR: %5lu Blk:%3lu", 
-             (unsigned long)isr_count, 
-             (unsigned long)blocks_processed);
-    lcd_print(&g_lcd, buf);
-    
-    // Line 2: Current byte position
-    lcd_set_cursor(&g_lcd, 0, 2);
-    uint8_t byte_idx = getCurrentByteIndex();
-    uint8_t last_byte = getLastByteValue();
-    snprintf(buf, sizeof(buf), "Pos:%2u Last:0x%02X   ", byte_idx, last_byte);
-    lcd_print(&g_lcd, buf);
-    
-    // Line 3: Change detection
-    lcd_set_cursor(&g_lcd, 0, 3);
-    if (isr_count != last_interrupt_count) {
-        lcd_print(&g_lcd, "RECEIVING...        ");
-        last_interrupt_count = isr_count;
-    } else {
-        lcd_print(&g_lcd, "Idle                ");
-    }
-}
-
-/**
- * @brief Test mode - display first received byte values
- */
-void display_test_mode(void) {
-    static uint32_t last_update = 0;
-    uint32_t now = get_millis();
-    
-    if (now - last_update < 1000) return;
-    last_update = now;
-    
-    char buf[21];
-    
-    lcd_set_cursor(&g_lcd, 0, 0);
-    lcd_print(&g_lcd, "Test Mode - Waiting ");
-    
-    lcd_set_cursor(&g_lcd, 0, 1);
-    snprintf(buf, sizeof(buf), "ISR:%lu B:%u       ", 
-             (unsigned long)getInterruptCount(),
-             getCurrentByteIndex());
-    lcd_print(&g_lcd, buf);
-    
-    // Show first 8 bytes of current block
-    lcd_set_cursor(&g_lcd, 0, 2);
-    for (int i = 0; i < 8 && i < MSG_BYTES; i++) {
-        snprintf(buf, 4, "%02X ", receivedMessage[i]);
-        lcd_print(&g_lcd, buf);
-    }
-    
-    lcd_set_cursor(&g_lcd, 0, 3);
-    for (int i = 8; i < 16 && i < MSG_BYTES; i++) {
-        snprintf(buf, 4, "%02X ", receivedMessage[i]);
-        lcd_print(&g_lcd, buf);
-    }
-}
-
-uint32_t keys_ready = 0;
-/**
- * @brief Process received message blocks from mechanical system
- * NOW USES KEYS FROM SENDER MCU
- */
-void process_received_blocks(void) {
-    if (messageReceivedFlag) {
-        messageReceivedFlag = 0;
-        digitalWrite(LED_PIN, 1);
-        
-        // Check if we have the key for this block
-        if (!keys_ready) {
-            // Keys not received yet - skip or buffer
-            digitalWrite(LED_PIN, 0);
-            return;
-        }
-        
-        // Fetch key for current block
-        uint8_t key[16];
-        int key_result = getReceivedKey(blocks_processed, key);
-        
-        if (key_result != 0) {
-            // Key not available for this block index
-            //led_error_blink();
-            digitalWrite(LED_PIN, 0);
-            return;
-        }
-        
-        // Decrypt: KEY + CIPHERTEXT -> PLAINTEXT
-        uint8_t plaintext[16];
-        int decrypt_result = fpgaDecryptBlock(
-            key,                               // Key from sender MCU
-            (const uint8_t*)receivedMessage,   // Ciphertext from mechanical
-            plaintext                          // Output plaintext
-        );
-        
-        if (decrypt_result == 0) {
-            // Decryption successful - store plaintext
-            receiver_store_block(blocks_processed, plaintext);
-            on_block_received(&g_lcd);
-            blocks_processed++;
-        } else {
-            // Decryption failed
-            //led_error_blink();
-        }
-        
-        digitalWrite(LED_PIN, 0);
-    }
-}
-
-/**
- * @brief Poll for incoming keys from sender MCU
- * Call this in main loop before processing blocks
- */
-void poll_for_keys(void) {
-    if (!keys_ready) {
-        // Poll key reception state machine
-        pollKeyReception();
-        
-        // Check if reception complete
-        if (areKeysReceived()) {
-            keys_ready = 1;
-            
-            // Update LCD with key count
-            uint8_t num_keys = getNumKeysReceived();
-            uint8_t orig_len = getOriginalMessageLength();
-            
-            lcd_set_cursor(&g_lcd, 0, 1);
-            char buf[21];
-            snprintf(buf, sizeof(buf), "Keys RX: %u (L=%u) ", num_keys, orig_len);
-            lcd_print(&g_lcd, buf);
-            
-            // Set expected transfer size for progress bar
-            set_expected_transfer_size(orig_len);
-            
-            // Visual feedback
-            for (int i = 0; i < 3; i++) {
-                digitalWrite(LED_PIN, 1);
-                delay_millis(TIM15, 100);
-                digitalWrite(LED_PIN, 0);
-                delay_millis(TIM15, 100);
-            }
-        }
-    }
-}
-
-/**
- * @brief Display status including key reception
- */
-void display_status_with_keys(void) {
-    static uint32_t last_update = 0;
-    uint32_t now = get_millis();
-    
-    if (now - last_update < 500) return;
-    last_update = now;
-    
-    char buf[21];
-    
-    // Line 0: Title
-    lcd_set_cursor(&g_lcd, 0, 0);
-    lcd_print(&g_lcd, "MechaCrypt Receiver ");
-    
-    // Line 1: Key status
-    lcd_set_cursor(&g_lcd, 0, 1);
-    if (keys_ready) {
-        snprintf(buf, sizeof(buf), "Keys:%u Blk:%u    ", 
-                 getNumKeysReceived(), blocks_processed);
-    } else {
-        lcd_print(&g_lcd, "Waiting for keys... ");
-    }
-    lcd_print(&g_lcd, buf);
-    
-    // Line 2 & 3: Progress bar (if keys received)
-    if (keys_ready && get_total_expected_blocks() > 0) {
-        lcd_update_transfer_status(&g_lcd, blocks_processed, 
-                                    get_total_expected_blocks());
-    }
-}
-
-// Main entry point
-int main(void) {
+// ----------------- Main entry -----------------
+int main(void)
+{
     // Core clocks
     configureFlash();
     configureClock();
@@ -294,77 +182,68 @@ int main(void) {
     gpioEnable(GPIO_PORT_B);
     gpioEnable(GPIO_PORT_C);
 
-    // Status LED
+    // Status LED (no blinking, just configured in case you want it later)
     pinMode(LED_PIN, GPIO_OUTPUT);
-    digitalWrite(LED_PIN, 0);
 
-    // Timers
+    // Timer for delay_millis (used elsewhere in project)
     initTIM(TIM15);
+
     initTIM15_millis();
 
-    // USART for ESP8266
+    // Initiallize USART1 for ESP8266
     USART_TypeDef *USART = initUSART(USART1_ID, 125000);
 
-    // LCD
-    lcd_hw_init();
-    lcd_clear(&g_lcd);
-    lcd_set_cursor(&g_lcd, 0, 0);
-    lcd_print(&g_lcd, "MechaCrypt Receiver ");
-    lcd_set_cursor(&g_lcd, 0, 1);
-    lcd_print(&g_lcd, "Initializing...     ");
-    delay_millis(TIM15, 1000);
+    // --- Configure USART1 to PB6 (TX) / PB7 (RX) ---
 
-    // Initialize mechanical message receiver
+    // Configure PB6/PB7 as alternate function pins
+    pinMode(PB6, GPIO_ALT);
+    pinMode(PB7, GPIO_ALT);
+
+    // Clear existing AF bits for pins 6 and 7
+    GPIOB->AFR[0] &= ~((0xF << GPIO_AFRL_AFSEL6_Pos) |
+                       (0xF << GPIO_AFRL_AFSEL7_Pos));
+
+    // Set AF7 (USART1) for PB6 and PB7
+    GPIOB->AFR[0] |= (0b0111 << GPIO_AFRL_AFSEL6_Pos) |
+                     (0b0111 << GPIO_AFRL_AFSEL7_Pos);
+
+    // Call LCD initialization function
+    lcd_hw_init();
+
     initMsgReceive();
 
-    // Initialize MCU-to-MCU SPI receiver (NEW!)
-    initMCU_SPI_Receiver();
+    // receiver_demo_init_plaintext();  // Sample demo plaintext data for Midpoint check in
 
-    // Clear storage
-    for (int i = 0; i < MAX_BLOCKS; i++) {
-        memset((void*)received_blocks[i], 0, 16);
-        have_received[i] = 0;
-    }
-    total_received = 0;
-    keys_ready = 0;
+    
 
-    // Initialize FPGA SPI
-    initSPI(0b111, 0, 0);
+    // Initialize SPI for FPGA communication
+    initSPI(0b111, 0, 0);  
+
+    // Chip select pin for FPGA
     pinMode(SPI_CE, GPIO_OUTPUT);
-    digitalWrite(SPI_CE, 1);
-    
-    // Initialize FPGA decrypt interface
-    initFPGADecrypt();
+    digitalWrite(SPI_CE, 1);  // idle high (not selected)
 
-    // Ready message
-    lcd_clear(&g_lcd);
-    lcd_set_cursor(&g_lcd, 0, 0);
-    lcd_print(&g_lcd, "Waiting for Keys... ");
-    
-    // Blink to show ready
-    for (int i = 0; i < 3; i++) {
-        digitalWrite(LED_PIN, 1);
-        delay_millis(TIM15, 100);
-        digitalWrite(LED_PIN, 0);
-        delay_millis(TIM15, 100);
-    }
+    inject_test_ciphertext();
 
-    // Main loop
+    delay_millis(TIM15, 300);   // give ESP time to stabilize
+
+    verify_pulldowns();
+    check_pc14_pc15();
+
+    // Main loop:
+    //  - service HTTP
+    //  - SPI fetches blocks from FPGA
     while (1) {
-        // 1. Poll for incoming keys from sender MCU (PRIORITY)
-        poll_for_keys();
-        
-        // 2. Process received blocks from mechanical system
-        //    (only after keys are ready)
-        process_received_blocks();
-        
-        // 3. Service HTTP requests
         processWebRequest(USART);
+
+        // receiver_spi_demo_poll(); // Uncomment to enable SPI fetching
+        demo_progress_bar_nonblocking();
         
-        // 4. Update display
-        display_status_with_keys();
-        
-        // Small delay
-        delay_millis(TIM15, 10);
+
+        if (get_received_block_count() >= get_total_expected_blocks() && get_total_expected_blocks() > 0) {
+            // All blocks received
+            lcd_set_cursor(&g_lcd, 0, 3);
+            lcd_print(&g_lcd, "Transfer Complete!   ");
+        }
     }
 }

@@ -22,6 +22,74 @@ volatile uint16_t total_received      = 0;
 volatile uint16_t debug_request_count = 0;
 
 
+// ======================================================
+// Test helper: inject one known ciphertext + key
+// ======================================================
+/**
+ * Replace inject_test_ciphertext() in webpage.c with this:
+ */
+
+/**
+ * @brief Diagnostic test - read more bytes to see the full pattern
+ */
+
+void inject_test_ciphertext(void) {
+    const uint8_t key[16] = {
+        0x2B,0x7E,0x15,0x16,0x28,0xAE,0xD2,0xA6,
+        0xAB,0xF7,0x15,0x88,0x09,0xCF,0x4F,0x3C
+    };
+    
+    const uint8_t plaintext[16] = {
+        0x32,0x43,0xF6,0xA8,0x88,0x5A,0x30,0x8D,
+        0x31,0x31,0x98,0xA2,0xE0,0x37,0x07,0x34
+    };
+    
+    uint8_t buffer[48];  // Read 3 blocks worth to see pattern
+    
+    // Send data
+    digitalWrite(PA5, 1);
+    delay_millis(TIM15, 5);
+    
+    digitalWrite(SPI_CE, 0);
+    delay_millis(TIM15, 2);
+    
+    for (int i = 15; i >= 0; i--) spiSendReceive(key[i]);
+    for (int i = 15; i >= 0; i--) spiSendReceive(plaintext[i]);
+    
+    delay_millis(TIM15, 2);
+    digitalWrite(SPI_CE, 1);
+    digitalWrite(PA5, 0);
+    
+    // Wait for DONE
+    uint32_t timeout = 10000000;
+    while (!digitalRead(PA6) && timeout > 0) timeout--;
+    
+    if (timeout > 0) {
+        delay_millis(TIM15, 20);
+        
+        // Read 48 bytes to see full pattern
+        digitalWrite(SPI_CE, 0);
+        delay_millis(TIM15, 2);
+        
+        for (int i = 0; i < 48; i++) {
+            buffer[i] = (uint8_t)spiSendReceive(0x00);
+        }
+        
+        delay_millis(TIM15, 2);
+        digitalWrite(SPI_CE, 1);
+        
+        // Store all 3 blocks
+        receiver_store_block(0, &buffer[0]);
+        receiver_store_block(1, &buffer[16]);
+        receiver_store_block(2, &buffer[32]);
+    } else {
+        // Timeout
+        for (int i = 0; i < 16; i++) buffer[i] = 0xEE;
+        receiver_store_block(0, buffer);
+    }
+}
+
+
 // Debug LED
 static void led_blink_short(void) {
     digitalWrite(LED_PIN, 1);

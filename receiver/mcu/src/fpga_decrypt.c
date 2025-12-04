@@ -51,7 +51,7 @@ int fpgaDecryptBlock(const uint8_t key[16], const uint8_t ciphertext[16], uint8_
     digitalWrite(FPGA_LOAD, 1);
     
     // Small delay to ensure LOAD is recognized
-    delay_millis(TIM15, 1);
+    delay_millis(TIM15, 5);
     
     // Step 2: Select FPGA (CS low)
     digitalWrite(SPI_CE, 0);
@@ -76,6 +76,7 @@ int fpgaDecryptBlock(const uint8_t key[16], const uint8_t ciphertext[16], uint8_
     digitalWrite(SPI_CE, 1);
     
     // Step 6: Deassert LOAD signal to start decryption
+    while(SPI1->SR & SPI_SR_BSY);
     digitalWrite(FPGA_LOAD, 0);
     
     // Step 7: Wait for DONE signal (with timeout)

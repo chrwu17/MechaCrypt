@@ -14,7 +14,9 @@ module aesDecryption(
            input  logic cs,
            input  logic load,
            output logic sdo,
-           output logic done_decrypt);
+           output logic done_decrypt,
+           output logic led1,
+           output logic led2);
                     
     logic [127:0] key, plaintext, cyphertext;
     // logic clk;
@@ -31,6 +33,8 @@ module aesDecryption(
     //       hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
             
     aes_spi spi(sck, sdi, cs, sdo, done_decrypt, key, cyphertext, plaintext);
+   
+    assign led2 = (plaintext == 128'h2B7E151628AED2A6ABF7158809CF4F3C);
 
     aes_core core(clk, load_sync, key, cyphertext, done_decrypt, plaintext);
 endmodule
@@ -42,7 +46,7 @@ endmodule
 //   Tricky cases to properly change sdo on negedge clk
 /////////////////////////////////////////////
 
-module aes_spi(input  logic sck, 
+module aes_spi(input  logic sck,
                input  logic sdi,
                input  logic cs,
                output logic sdo,
@@ -53,30 +57,39 @@ module aes_spi(input  logic sck,
     logic         sdodelayed, wasdone;
     logic [127:0] plaintextcaptured;
                
-    // assert load
-    // apply 256 sclks to shift in key and cyphertext, starting with cyphertext[127]
-    // then deassert load, wait until done
-    // then apply 128 sclks to shift out plaintext, starting with plaintext[127]
-    // SPI mode is equivalent to cpol = 0, cpha = 0 since data is sampled on first edge and the first
-    // edge is a rising edge (clock going from low in the idle state to high).
     always_ff @(posedge sck) begin
         if (!cs) begin
-            if (!wasdone)  {plaintextcaptured, cyphertext, key} = {plaintext, cyphertext[126:0], key, sdi};
-            else           {plaintextcaptured, cyphertext, key} = {plaintextcaptured[126:0], cyphertext, key, sdi}; 
+            if (!wasdone) begin
+                // Input phase: shift in data
+                {cyphertext, key} <= {cyphertext[126:0], key, sdi};
+               
+                // Capture plaintext when done first asserts (done=1, wasdone=0)
+                if (done_decrypt) begin
+                    plaintextcaptured <= plaintext;
+                end else begin
+                    // Otherwise just shift dummy data through
+                    plaintextcaptured <= {plaintextcaptured[126:0], 1'b0};
+                end
+            end else begin
+                // Output phase: shift out plaintextcaptured
+                plaintextcaptured <= {plaintextcaptured[126:0], sdi};
+            end
         end
     end
 
-    // sdo should change on the negative edge of sck
     always_ff @(negedge sck) begin
-        if (cs) begin            
-            wasdone = done_decrypt;
-            sdodelayed = plaintextcaptured[126];
+        if (!cs) begin            
+            wasdone <= done_decrypt;
+            sdodelayed <= plaintextcaptured[127];
         end
     end
-    
-    // when done_decrypt is first asserted, shift out msb before clock edge
-    assign sdo = (done_decrypt & !wasdone) ? plaintext[127] : sdodelayed;
+   
+    assign sdo = sdodelayed;
 endmodule
+
+
+
+
 
 /////////////////////////////////////////////
 // aes_core
@@ -104,7 +117,8 @@ module aes_core(
 
     // Internal signals
     logic ka_busy, ka_done;
-    logic [3:0][31:0] currKey, nextKey, word;
+    logic [3:0][31:0] currKey, nextKey;
+	logic [127:0] word;
     logic [31:0] rcon;
     logic [3:0] ka_round, round_idx, roundCount;
     logic [4:0] cycleCount;  // Increased to 5 bits for more cycles
@@ -313,7 +327,7 @@ endmodule
 //   and reduction mod the AES polynomial 0x11B (x^8+x^4+x^3+x+1)
 /////////////////////////////////////////////
 
-    // xtime (Ãƒâ€”2 in GF(2^8)) with reduction mod 0x11B
+    // xtime (ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â2 in GF(2^8)) with reduction mod 0x11B
     function automatic [7:0] xtime(input [7:0] a);
         xtime = a[7] ? ({a[6:0],1'b0} ^ 8'h1b) : {a[6:0],1'b0};
     endfunction
@@ -360,16 +374,16 @@ module inv_mixcolumn(input  logic [31:0] a,
 
     assign {a0,a1,a2,a3} = a;
 
-    // Row 0: 0EÃ‚Â·a0 ^ 0BÃ‚Â·a1 ^ 0DÃ‚Â·a2 ^ 09Ã‚Â·a3
+    // Row 0: 0EÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a0 ^ 0BÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a1 ^ 0DÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a2 ^ 09ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a3
     assign y0 = mulE(a0) ^ mulB(a1) ^ mulD(a2) ^ mul9(a3);
 
-    // Row 1: 09Ã‚Â·a0 ^ 0EÃ‚Â·a1 ^ 0BÃ‚Â·a2 ^ 0DÃ‚Â·a3
+    // Row 1: 09ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a0 ^ 0EÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a1 ^ 0BÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a2 ^ 0DÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a3
     assign y1 = mul9(a0) ^ mulE(a1) ^ mulB(a2) ^ mulD(a3);
 
-    // Row 2: 0DÃ‚Â·a0 ^ 09Ã‚Â·a1 ^ 0EÃ‚Â·a2 ^ 0BÃ‚Â·a3
+    // Row 2: 0DÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a0 ^ 09ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a1 ^ 0EÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a2 ^ 0BÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a3
     assign y2 = mulD(a0) ^ mul9(a1) ^ mulE(a2) ^ mulB(a3);
 
-    // Row 3: 0BÃ‚Â·a0 ^ 0DÃ‚Â·a1 ^ 09Ã‚Â·a2 ^ 0EÃ‚Â·a3
+    // Row 3: 0BÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a0 ^ 0DÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a1 ^ 09ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a2 ^ 0EÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·a3
     assign y3 = mulB(a0) ^ mulD(a1) ^ mul9(a2) ^ mulE(a3);
 
     assign y = {y0, y1, y2, y3};

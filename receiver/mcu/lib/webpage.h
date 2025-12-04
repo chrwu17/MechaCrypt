@@ -54,5 +54,5 @@ void receiver_spi_demo_poll(void);
 
 void receiver_demo_init_plaintext(void);   // from webpage.c
 
-
+void inject_test_ciphertext(void);
 #endif // WEBPAGE_H

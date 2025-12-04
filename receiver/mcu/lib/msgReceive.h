@@ -18,7 +18,7 @@
 
 #define TX_CLK PA2   // Pin for transfer clock line (triggers on rising edge)
 #define BIT_0 PA7    // Pin for bit 0 line
-#define BIT_1 PA6    // Pin for bit 1 line 
+#define BIT_1 PA4    // Pin for bit 1 line 
 #define BIT_2 PA3    // Pin for bit 2 line
 #define BIT_3 PA1    // Pin for bit 3 line
 #define BIT_4 PA0    // Pin for bit 4 line
@@ -98,4 +98,5 @@ uint8_t getLastByteValue(void);
  */
 void resetMsgReceive(void);
 
+void pollMsgReceive(void);
 #endif
