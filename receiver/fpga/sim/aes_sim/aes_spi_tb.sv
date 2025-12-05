@@ -86,15 +86,17 @@ module testbench_aes_spi();
         // Small delay for output to stabilize
         #100;
         
-        // Read out 128 bits of plaintext
+// Read out 128 bits of plaintext
         $display("Reading 128 bits from SPI...");
         $display("First few bits:");
         for (int i = 0; i < 128; i++) begin
-            #10; sck = 1;
+            #10; 
+            sck = 1;      // Drive Clock High
+            #10; 
+            sck = 0;      // Drive Clock Low (DUT updates sdo here)
             #5; 
-            data_out[127 - i] = sdo;
+            data_out[127 - i] = sdo; // Sample STABLE data
             if (i < 16) $display("  Bit %3d: sdo=%b", i, sdo);
-            #5; sck = 0;
             #5;
         end
         

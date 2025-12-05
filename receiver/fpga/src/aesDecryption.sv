@@ -11,12 +11,13 @@ module aesDecryption(
            input  logic clk,  // For simulation, replace with internal oscillator in FPGA
            input  logic sck, 
            input  logic sdi,
-           input  logic cs,
+        //    input  logic cs,
            input  logic load,
            output logic sdo,
-           output logic done_decrypt,
-           output logic led1,
-           output logic led2);
+           output logic done_decrypt
+        //    output logic led1,
+        //    output logic led2
+           );
                     
     logic [127:0] key, plaintext, cyphertext;
     // logic clk;
@@ -34,7 +35,7 @@ module aesDecryption(
             
     aes_spi spi(sck, sdi, cs, sdo, done_decrypt, key, cyphertext, plaintext);
    
-    assign led2 = (plaintext == 128'h2B7E151628AED2A6ABF7158809CF4F3C);
+    // assign led2 = (plaintext == 128'h2B7E151628AED2A6ABF7158809CF4F3C);
 
     aes_core core(clk, load_sync, key, cyphertext, done_decrypt, plaintext);
 endmodule
@@ -58,7 +59,7 @@ module aes_spi(input  logic sck,
     logic [127:0] plaintextcaptured;
                
     always_ff @(posedge sck) begin
-        if (!cs) begin
+        // if (!cs) begin
             if (!wasdone) begin
                 // Input phase: shift in data
                 {cyphertext, key} <= {cyphertext[126:0], key, sdi};
@@ -74,14 +75,14 @@ module aes_spi(input  logic sck,
                 // Output phase: shift out plaintextcaptured
                 plaintextcaptured <= {plaintextcaptured[126:0], sdi};
             end
-        end
+        // end
     end
 
     always_ff @(negedge sck) begin
-        if (!cs) begin            
+        // if (!cs) begin            
             wasdone <= done_decrypt;
             sdodelayed <= plaintextcaptured[127];
-        end
+        // end
     end
    
     assign sdo = sdodelayed;
