@@ -10,7 +10,7 @@
 
 // ----------------- Local LCD handle -----------------
 static lcd_i2c_t g_lcd;
-
+volatile uint8_t buffer[48];
 // ----------------- Simple microsecond delay using SysTick -----------------
 void delay_us(uint32_t us)
 {
@@ -28,63 +28,13 @@ void delay_us(uint32_t us)
     SysTick->CTRL = 0;
 }
 
-// Add to your initialization, BEFORE starting reception
-void verify_pulldowns(void) {
-    printf("\r\n=== Verifying Pull-downs ===\r\n");
-    
-    delay_millis(TIM15, 100);  // Let pins settle
-    
-    uint32_t porta = GPIOA->IDR;
-    uint32_t portb = GPIOB->IDR;
-    uint32_t portc = GPIOC->IDR;
-    
-    printf("BIT_0 (PA7): %d %s\r\n", (porta >> 7) & 1, 
-           ((porta >> 7) & 1) ? "FAIL - should be LOW" : "OK");
-    printf("BIT_1 (PA4): %d %s\r\n", (porta >> 4) & 1,
-           ((porta >> 4) & 1) ? "FAIL - should be LOW" : "OK");
-    printf("BIT_2 (PA3): %d %s\r\n", (porta >> 3) & 1,
-           ((porta >> 3) & 1) ? "FAIL - should be LOW" : "OK");
-    printf("BIT_3 (PA1): %d %s\r\n", (porta >> 1) & 1,
-           ((porta >> 1) & 1) ? "FAIL - should be LOW" : "OK");
-    printf("BIT_4 (PA0): %d %s\r\n", (porta >> 0) & 1,
-           ((porta >> 0) & 1) ? "FAIL - should be LOW" : "OK");
-    printf("BIT_5 (PB1): %d %s\r\n", (portb >> 1) & 1,
-           ((portb >> 1) & 1) ? "FAIL - should be LOW" : "OK");
-    printf("BIT_6 (PC14): %d %s\r\n", (portc >> 14) & 1,
-           ((portc >> 14) & 1) ? "FAIL - should be LOW" : "OK");
-    printf("BIT_7 (PC15): %d %s\r\n", (portc >> 15) & 1,
-           ((portc >> 15) & 1) ? "FAIL - should be LOW" : "OK");
-}
-
-void check_pc14_pc15(void) {
-    printf("\r\n=== Checking PC14/PC15 Configuration ===\r\n");
-    
-    // Check if LSE is enabled
-    if (RCC->BDCR & RCC_BDCR_LSEON) {
-        printf("WARNING: LSE oscillator is enabled!\r\n");
-        printf("PC14/PC15 are being used by the 32kHz crystal.\r\n");
-        printf("These pins are NOT available as GPIO!\r\n");
-    }
-    
-    // Check GPIO mode
-    uint32_t moder = GPIOC->MODER;
-    printf("PC14 mode: 0x%lx (should be 0x0 for input)\r\n", (moder >> 28) & 0x3);
-    printf("PC15 mode: 0x%lx (should be 0x0 for input)\r\n", (moder >> 30) & 0x3);
-    
-    // Check pull-up/pull-down
-    uint32_t pupdr = GPIOC->PUPDR;
-    printf("PC14 PUPDR: 0x%lx (should be 0x2 for pull-down)\r\n", (pupdr >> 28) & 0x3);
-    printf("PC15 PUPDR: 0x%lx (should be 0x2 for pull-down)\r\n", (pupdr >> 30) & 0x3);
-    
-    // Try to read current state
-    uint32_t idr = GPIOC->IDR;
-    printf("PC14 state: %ld\r\n", (idr >> 14) & 1);
-    printf("PC15 state: %ld\r\n", (idr >> 15) & 1);
-}
-
 // Global millisecond counter (overflows after ~49 days)
 volatile uint32_t g_millis = 0;
 
+
+uint32_t get_millis(void) {
+    return g_millis;
+}
 /**
  * @brief Initialize TIM15 for 1ms interrupts
  */
@@ -108,6 +58,91 @@ void initTIM15_millis(void) {
     TIM15->CR1 |= TIM_CR1_CEN;
 }
 
+uint8_t fpga_read_message(uint8_t *buffer) {
+    if (!digitalRead(PA8)) {
+        return 0;
+    }
+    
+    lcd_clear(&g_lcd);
+    lcd_set_cursor(&g_lcd, 0, 0);
+    lcd_print(&g_lcd, "Starting SPI...");
+    delay_millis(TIM15, 500);
+    
+    // Assert chip select
+    digitalWrite(SPI_CE, 0);
+    lcd_set_cursor(&g_lcd, 0, 1);
+    lcd_print(&g_lcd, "CS asserted");
+    delay_millis(TIM15, 500);
+    
+    // Read first byte only for testing
+    uint8_t test_byte = spiSendReceive(0x00);
+    
+    lcd_set_cursor(&g_lcd, 0, 2);
+    char hex[10];
+    sprintf(hex, "Byte: %02X", test_byte);
+    lcd_print(&g_lcd, hex);
+    
+    // Read remaining bytes
+    buffer[0] = test_byte;
+    for (int i = 1; i < 16; i++) {
+        buffer[i] = spiSendReceive(0x00);
+    }
+    
+    delay_millis(TIM15, 100);
+    digitalWrite(SPI_CE, 1);
+    
+    lcd_set_cursor(&g_lcd, 0, 3);
+    lcd_print(&g_lcd, "CS deasserted");
+    delay_millis(TIM15, 2000);
+    
+    return 1;
+}
+
+volatile   uint8_t received_data[16];
+void inject_test_ciphertext(void) {
+    // Wait for ready signal from FPGA
+    uint32_t timeout = get_millis() + 10000;
+    while (!digitalRead(PA8)) {
+        if (get_millis() > timeout) {
+            lcd_clear(&g_lcd);
+            lcd_print(&g_lcd, "Timeout waiting");
+            return;
+        }
+    }
+    
+    lcd_clear(&g_lcd);
+    lcd_print(&g_lcd, "Reading FPGA...");
+    
+    
+    // Assert CS
+    digitalWrite(SPI_CE, 0);
+    delay_millis(TIM15, 5);
+    
+    // Read 16 bytes
+    for (int i = 0; i < 16; i++) {
+        received_data[i] = spiSendReceive(0x00);
+        delay_millis(TIM15, 1);
+    }
+    
+    delay_millis(TIM15, 5);
+    digitalWrite(SPI_CE, 1);
+    
+    // *** KEY CHANGE: Store to shared state ***
+    receiver_store_block(0, received_data);  // Store as block 0
+    
+    // Display on LCD
+    lcd_clear(&g_lcd);
+    lcd_set_cursor(&g_lcd, 0, 0);
+    lcd_print(&g_lcd, "Block stored!");
+    
+    lcd_set_cursor(&g_lcd, 0, 1);
+    char hex_str[4];
+    for (int i = 0; i < 8; i++) {
+        sprintf(hex_str, "%02X ", received_data[i]);
+        lcd_print(&g_lcd, hex_str);
+    }
+}
+
 /**
  * @brief TIM15 interrupt handler - increments millisecond counter
  */
@@ -121,9 +156,7 @@ void TIM1_BRK_TIM15_IRQHandler(void) {
 /**
  * @brief Get current millisecond count
  */
-uint32_t get_millis(void) {
-    return g_millis;
-}void demo_progress_bar_nonblocking(void) {
+void demo_progress_bar_nonblocking(void) {
     static uint32_t last_update = 0;
     static int block_count = 0;
     static uint8_t demo_started = 0;
@@ -217,27 +250,32 @@ int main(void)
     
 
     // Initialize SPI for FPGA communication
-    initSPI(0b111, 0, 0);  
+    initSPI(0b111, 0, 0); 
+    
+     
 
     // Chip select pin for FPGA
     pinMode(SPI_CE, GPIO_OUTPUT);
     digitalWrite(SPI_CE, 1);  // idle high (not selected)
+    pinMode(PA8, GPIO_INPUT);
+    GPIOA->PUPDR &= ~(0b11 << (8 * 2));  // Clear bits
+    GPIOA->PUPDR |= (0b10 << (8 * 2));   // Set pull-down (10)
 
     inject_test_ciphertext();
+    
 
+    // Add to main.c after inject_test_ciphertext() call:
     delay_millis(TIM15, 300);   // give ESP time to stabilize
 
-    verify_pulldowns();
-    check_pc14_pc15();
-
+    
     // Main loop:
     //  - service HTTP
     //  - SPI fetches blocks from FPGA
     while (1) {
         processWebRequest(USART);
 
-        // receiver_spi_demo_poll(); // Uncomment to enable SPI fetching
-        demo_progress_bar_nonblocking();
+        receiver_spi_demo_poll(); // Uncomment to enable SPI fetching
+        //demo_progress_bar_nonblocking();
         
 
         if (get_received_block_count() >= get_total_expected_blocks() && get_total_expected_blocks() > 0) {

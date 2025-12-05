@@ -1,88 +1,153 @@
 // Josaphat Ngoga
 // jngoga@g.hmc.edu
-// Modified: 12/4/2025
+// 11/6/2025
 
 //////////////////////////////////////////////////////////// 
 // msg_receive() 
-//   Receives 8-bit data bytes synchronized to a slower transfer clock (tx_clk) from the sender module,
-//   and reconstructs them into 256-bit output (ciphertext + key, 32 bytes).
-//   It is meant to receive data from the activated limit switches of the MechaCrypt system.
-//   
-//   Added SPI output capability to shift the reconstructed message to an MCU.
+//    Receives 8-bit data bytes synchronized to a slower transfer clock (tx_clk) from the sender module,
+//    and reconstructs them into a 128-bit output message (16 bytes).
+//    Added debug outputs to diagnose reception issues.
 ////////////////////////////////////////////////////////////
 
 module msg_receive #(
-    parameter TOTAL_BYTES = 32    // total bytes expected (16 for ciphertext + 16 for key)
+    parameter TOTAL_BYTES = 16,
+    // FIX FOR 3 HZ INPUT: Increased debounce cycle count significantly.
+    // 2,400,000 cycles at 24 MHz clock = 100 milliseconds lockout time.
+    // This is robust against mechanical bounce but safe (less than 333ms period of a 3Hz signal).
+    parameter DEBOUNCE_CYCLES = 1_200_000
     )(
-    input  logic         clk,     // FPGA system clock
-    input  logic         reset,
-    input  logic         tx_clk,
-    input  logic [7:0]   data_in, // 8 parallel data lines from sender
+    // input  logic          clk,
+    input  logic          reset,
+    input  logic          tx_clk,
+    input  logic [7:0]    data_in,
     
     // SPI interface to MCU
-    input  logic         sck,     // MCU SPI clock
-    input  logic         cs,      // MCU chip select (active low)
-    output logic         sdo,     // MCU MISO
+    input  logic          sck,
+    input  logic          cs,
+    output logic          sdo,
     
-    output logic [127:0] ciphertext, // reconstructed ciphertext (first 16 bytes)
-    output logic [127:0] key,        // reconstructed key (last 16 bytes)
-    output logic         done,       // high when full array received
-    output logic         ready);     // high when ready to send to MCU
+    // Debug outputs - connect to LEDs or test points
+    output logic [3:0]    debug_byte_count, // Shows how many bytes received (0-15)
+    output logic          debug_tx_activity, // Blinks when tx_clk edges detected
+    output logic          debug_debounce_locked, // Shows when debounce is blocking
+    output logic          debug_tx_clk_raw,  // Shows raw tx_clk input state
+    output logic          debug_tx_clk_synced, // Shows synchronized tx_clk
+    
+    output logic          done,
+    output logic          ready);
 
-    // Sync tx_clk to FPGA clk domain
-    logic tx_clk_sync_0, tx_clk_sync_1;
+    logic clk;
+    HSOSC #(.CLKHF_DIV(2'b11)) 
+          hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 24 MHz
+    // Sync tx_clk to FPGA clk domain with stable initial state
+    logic tx_clk_sync_0, tx_clk_sync_1, tx_clk_prev;
     always_ff @(posedge clk or negedge reset) begin
         if (!reset) begin
             tx_clk_sync_0 <= 0;
             tx_clk_sync_1 <= 0;
+            tx_clk_prev <= 0;  // Track previous state
         end else begin
             tx_clk_sync_0 <= tx_clk;
             tx_clk_sync_1 <= tx_clk_sync_0;
+            tx_clk_prev <= tx_clk_sync_1;  // Save previous for edge detection
         end
     end
 
-    // Detect rising edge of synchronized tx_clk
+    // Detect rising edge - now uses stable previous state
     logic tx_clk_rise;
-    assign tx_clk_rise = (tx_clk_sync_0 && !tx_clk_sync_1);
+    assign tx_clk_rise = (tx_clk_sync_1 && !tx_clk_prev);
 
-    // Assemble received bytes into 256-bit buffer
-    logic [4:0] idx;  // 5 bits to count 0-31
-    logic [255:0] buffer;
-    logic receiving;
+    // ========== Debouncing Logic ==========
+    logic [$clog2(DEBOUNCE_CYCLES)-1:0] debounce_counter;
+    logic tx_clk_valid;
+    logic tx_clk_rise_debounced;
+    logic [7:0] startup_delay;  // Ignore first ~256 cycles after reset
 
     always_ff @(posedge clk or negedge reset) begin
         if (!reset) begin
-            idx        <= 0;
-            buffer     <= 0;
-            receiving  <= 0;
-            done       <= 0;
-        end 
-        else begin
-            if (tx_clk_rise) begin
-                receiving <= 1'b1;
-                done      <= 1'b0;
-
-                // shift received byte into buffer (LSB side)
-                buffer <= {buffer[247:0], data_in};
-
-                if (idx == (TOTAL_BYTES - 1)) begin
-                    done       <= 1'b1;
-                    receiving  <= 1'b0;
-                    idx        <= 0;
-                end else begin
-                    idx        <= idx + 1;
-                end
+            debounce_counter <= 0;
+            tx_clk_valid <= 1'b0;  // Start INVALID until startup completes
+            startup_delay <= 8'd255;
+        end else begin
+            // Startup delay counter
+            if (startup_delay > 0) begin
+                startup_delay <= startup_delay - 1;
+                tx_clk_valid <= 1'b0;
+            end
+            // Normal debounce operation
+            else if (debounce_counter > 0) begin
+                debounce_counter <= debounce_counter - 1;
+                tx_clk_valid <= 1'b0;
+            end else begin
+                tx_clk_valid <= 1'b1;
+            end
+            
+            if (tx_clk_rise && tx_clk_valid) begin
+                debounce_counter <= DEBOUNCE_CYCLES;
             end
         end
     end
 
-    // Split buffer into ciphertext (upper 128 bits) and key (lower 128 bits)
-    assign ciphertext = buffer[255:128];
-    assign key        = buffer[127:0];
+    assign tx_clk_rise_debounced = tx_clk_rise && tx_clk_valid;
+
+    // ========== Byte Assembly Logic ==========
+    logic [4:0] idx;
+    logic [127:0] buffer;
+    logic receiving;
+
+    always_ff @(posedge clk or negedge reset) begin
+		if (!reset) begin
+			idx        <= 0;
+			buffer     <= 0;
+			receiving  <= 0;
+			done       <= 0;
+		end 
+		else begin
+			// Only process edges if we haven't completed yet
+			if (tx_clk_rise_debounced && !done) begin
+				receiving <= 1'b1;
+				buffer <= {buffer[119:0], data_in};
+
+				if (idx == (TOTAL_BYTES - 1)) begin
+					done       <= 1'b1;
+					receiving  <= 1'b0;
+					idx        <= 0;
+				end else begin
+					idx        <= idx + 1;
+				end
+			end
+			
+			// Only clear when SPI transaction completes
+			if (cs_rise && sending) begin
+				done <= 1'b0;
+				idx <= 0;  // Reset index too
+			end
+		end
+	end
+
+    // ========== Debug Signal Generation ==========
+    // Blink LED briefly when any tx_clk edge detected (debounced or not)
+    logic [15:0] activity_counter;
+    always_ff @(posedge clk or negedge reset) begin
+        if (!reset) begin
+            activity_counter <= 0;
+        end else begin
+            if (tx_clk_rise) begin
+                activity_counter <= 16'hFFFF;  // Keep LED on for ~1ms
+            end else if (activity_counter > 0) begin
+                activity_counter <= activity_counter - 1;
+            end
+        end
+    end
+    
+    assign debug_tx_activity = (activity_counter > 0);
+    assign debug_byte_count = idx;  // Current byte count
+    assign debug_debounce_locked = !tx_clk_valid;  // HIGH when debounce blocking
+    assign debug_tx_clk_raw = tx_clk;  // Raw input
+    assign debug_tx_clk_synced = tx_clk_sync_1;  // After synchronization
 
     // ========== SPI Output Logic ==========
-    // Send the complete 256-bit message (ciphertext + key) via SPI
-    logic [255:0] shiftOut;
+    logic [127:0] shiftOut;
     logic         sending;
     logic         sdo_next;
     logic         done_prev;
@@ -125,39 +190,43 @@ module msg_receive #(
     assign cs_rise = cs_sync_1 && !cs_prev;
 
     // Combined SPI logic - all driven from clk domain
-    always_ff @(posedge clk or negedge reset) begin
-        if (!reset) begin
-            done_prev <= 1'b0;
-            sending   <= 1'b0;
-            shiftOut  <= 256'd0;
-            sdo_next  <= 1'b0;
-        end 
-        else begin
-            // Track done signal
-            done_prev <= done;
-            
-            // Detect done rising edge and load data
-            if (done && !done_prev) begin
-                sending  <= 1'b1;
-                shiftOut <= buffer;
-                sdo_next <= buffer[255]; // Load first bit immediately
-            end
-            
-            // Reset only when CS goes high AND we were actively sending
-            if (cs_rise && sending) begin
-                sending  <= 1'b0;
-                sdo_next <= 1'b0;
-            end
-            
-            // Shift data on rising edge of sck
-            if (sck_rise && sending && !cs_sync_1) begin
-                shiftOut <= {shiftOut[254:0], 1'b0};
-                sdo_next <= shiftOut[254]; // Output next bit (before shift completes)
-            end
-        end
-    end
+    // Keep your sck_rise detection as is
+	assign sck_rise = sck_sync_1 && !sck_prev;
+
+	// Add falling edge detection
+	logic sck_fall;
+	assign sck_fall = !sck_sync_1 && sck_prev;
+
+	// Change shift logic to use falling edge:
+	always_ff @(posedge clk or negedge reset) begin
+		if (!reset) begin
+			done_prev <= 1'b0;
+			sending   <= 1'b0;
+			shiftOut  <= 128'd0;
+			sdo_next  <= 1'b0;
+		end 
+		else begin
+			done_prev <= done;
+			
+			if (done && !done_prev) begin
+				sending  <= 1'b1;
+				shiftOut <= buffer;
+				sdo_next <= buffer[127];
+			end
+			
+			if (cs_rise && sending) begin
+				sending  <= 1'b0;
+				sdo_next <= 1'b0;
+			end
+			
+			// CHANGED: Use falling edge to shift data
+			if (sck_fall && sending && !cs_sync_1) begin
+				shiftOut <= {shiftOut[126:0], 1'b0};
+				sdo_next <= shiftOut[126];
+			end
+		end
+	end
 
     assign sdo = sdo_next;
     assign ready = sending;
-
 endmodule

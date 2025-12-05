@@ -33,4 +33,6 @@ void configureClock(void);
 // Delay
 void delay_us(uint32_t us);
 
+uint32_t get_millis(void);
+
 #endif

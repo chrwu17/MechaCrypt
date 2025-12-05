@@ -67,13 +67,22 @@ module sender (
         .read_done  (read_done)
     );
 
+    // In sender.sv, add:
+    logic [127:0] key_latched;
+
+    always_ff @(posedge clk) begin
+        if (done) begin
+            key_latched <= key;
+        end
+    end
+
     // Message Sending Module
     msgSend send (
         .clk        (clk),
         .reset      (reset),
         .start      (read_done),
         .ciphertext (cipher_out),
-        .key        (key),
+        .key        (key_latched),
         .msg_out    (msg_out),
         .tx_clk     (tx_clk),
         .send_done  (send_done)

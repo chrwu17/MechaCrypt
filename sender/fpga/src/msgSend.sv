@@ -79,9 +79,9 @@ module msgSend #(
             sending    <= 1;
             idx        <= 0;
             send_done  <= 0;
-        end else if (sending && tx_clk_rising) begin
+        end else if (sending && tx_clk_rising) begin  // Keep on rising edge
             // advance on each tx_clk rising edge
-            if (idx == 32) begin
+            if (idx == 31) begin  // FIX: Change from 32 to 31
                 idx        <= 0;
                 sending    <= 0;
                 send_done  <= 1;
@@ -90,10 +90,20 @@ module msgSend #(
             end
         end
     end
+
+    logic [5:0] idx_display;
+
+    always_ff @(posedge clk or negedge reset) begin
+        if (!reset) begin
+            idx_display <= 0;
+        end else if (sending && tx_clk_rising) begin
+            idx_display <= idx;  // Capture current idx BEFORE it increments
+        end
+    end
     
     // Iteratively select the appropriate byte from msg_combined
     always_comb begin
-        case (idx)
+        case (idx_display)
             // Ciphertext bytes (0-15)
             5'd0:  msg_out_raw = msg_combined[255:248];
             5'd1:  msg_out_raw = msg_combined[247:240];

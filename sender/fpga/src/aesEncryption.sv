@@ -20,7 +20,7 @@ module aesEncryption(input  logic clk,
                      output logic [127:0] key,
                      output logic done);
 
-    logic [127:0] plaintext;
+    logic [127:0] plaintext, key_internal;
     
     // Synchronize load signal to the clk instead of sck
     logic load_meta, load_sync;
@@ -29,10 +29,11 @@ module aesEncryption(input  logic clk,
         load_sync <= load_meta;
     end
     
-    aes_spi spi(sck, sdi, cs, sdo, done, key, plaintext, cyphertext);
+    aes_spi spi(sck, sdi, cs, sdo, done, key_internal, plaintext, cyphertext);
 
-    aes_core core(clk, load_sync, key, plaintext, done, cyphertext);
+    aes_core core(clk, load_sync, key_internal, plaintext, done, cyphertext);
 	
+	assign key = key_internal;
     // assign led_test = load_sync;
 
 endmodule
