@@ -1,3 +1,7 @@
+// Josaphat Ngoga
+// jngoga@g.hmc.edu
+// 11/6/2025
+
 // Top-level Receiver Module
 // Receives 32 bytes (cyphertext + key), decrypts, and transmits plaintext via SPI
 

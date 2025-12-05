@@ -1,3 +1,7 @@
+// Josaphat Ngoga
+// jngoga@g.hmc.edu
+// 11/6/2025
+
 // SPI Transmitter Module
 // Sends 128-bit plaintext to MCU via SPI
 

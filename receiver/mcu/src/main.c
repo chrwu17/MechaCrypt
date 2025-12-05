@@ -243,9 +243,9 @@ int main(void)
     // Call LCD initialization function
     lcd_hw_init();
 
-    initMsgReceive();
+    // initMsgReceive();
 
-    // receiver_demo_init_plaintext();  // Sample demo plaintext data for Midpoint check in
+    receiver_demo_init_plaintext();  // Sample demo plaintext data for Midpoint check in
 
     
 
@@ -261,7 +261,7 @@ int main(void)
     GPIOA->PUPDR &= ~(0b11 << (8 * 2));  // Clear bits
     GPIOA->PUPDR |= (0b10 << (8 * 2));   // Set pull-down (10)
 
-    inject_test_ciphertext();
+    // inject_test_ciphertext();
     
 
     // Add to main.c after inject_test_ciphertext() call:
@@ -274,8 +274,8 @@ int main(void)
     while (1) {
         processWebRequest(USART);
 
-        receiver_spi_demo_poll(); // Uncomment to enable SPI fetching
-        //demo_progress_bar_nonblocking();
+        // receiver_spi_demo_poll(); // Uncomment to enable SPI fetching
+        demo_progress_bar_nonblocking();
         
 
         if (get_received_block_count() >= get_total_expected_blocks() && get_total_expected_blocks() > 0) {
