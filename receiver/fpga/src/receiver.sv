@@ -55,114 +55,6 @@ module receiver_top(
         .debug_tx_clk_synced(debug_tx_clk_synced)
     );
 
-    // ========== State Machine for Control ==========
-    typedef enum logic [1:0] {
-        IDLE,
-        DECRYPT,
-        TRANSMIT
-    } state_t;
-    
-    state_t state;
-    logic decrypt_start;
-    
-    always_ff @(posedge clk or negedge reset) begin
-        if (!reset) begin
-            state         <= IDLE;
-            decrypt_start <= 1'b0;
-            spi_load      <= 1'b0;
-        end else begin
-            case (state)
-                IDLE: begin
-                    decrypt_start <= 1'b0;
-                    spi_load      <= 1'b0;
-                    if (msg_done) begin
-                        state         <= DECRYPT;
-                        decrypt_start <= 1'b1;
-                    end
-                end
-                
-                DECRYPT: begin
-                    decrypt_start <= 1'b0;
-                    if (decrypt_done) begin
-                        state    <= TRANSMIT;
-                        spi_load <= 1'b1;
-                    end
-                end
-                
-                TRANSMIT: begin
-                    spi_load <= 1'b0;
-                    if (!spi_busy && !cs) begin  // Transmission complete
-                        state <= IDLE;
-                    end
-                end
-                
-                default: state <= IDLE;
-            endcase
-        end
-    end
-
-    // ========== AES Decryption Core ==========
-    aes_core_wrapper aes_decrypt(
-        .clk(clk),
-        .reset(reset),
-        .cyphertext(cyphertext),
-        .key(key),
-        .start(decrypt_start),
-        .plaintext(plaintext),
-        .done(decrypt_done)
-    );
-
-    // ========== SPI Transmitter ==========
-    spi_transmitter spi_tx(
-        .clk(clk),
-        .reset(reset),
-        .plaintext(plaintext),
-        .load(spi_load),
-        .sck(sck),
-        .cs(cs),
-        .sdo(sdo),
-        .ready(spi_ready),
-        .busy(spi_busy)
-    );
-
-    // ========== Status LEDs ==========
-    assign led_receiving    = (state == IDLE) && !msg_done;
-    assign led_decrypting   = (state == DECRYPT);
-    assign led_transmitting = (state == TRANSMIT);
-    
-    // ========== Debug Outputs ==========
-    assign debug_decryption_done = decrypt_done;
-    assign debug_spi_ready       = spi_ready;
-    assign debug_spi_busy        = spi_busy;
-
-endmodule
-
-// Simplified AES Core Wrapper
-// Takes cyphertext and key as inputs, outputs plaintext when done
-
-module aes_core_wrapper(
-    input  logic          clk,
-    input  logic          reset,
-    input  logic [127:0]  cyphertext,
-    input  logic [127:0]  key,
-    input  logic          start,          // Start decryption
-    
-    output logic [127:0]  plaintext,
-    output logic          done);
-
-    logic load_sync;
-    
-    // Generate load pulse
-    logic start_prev;
-    always_ff @(posedge clk or negedge reset) begin
-        if (!reset) begin
-            start_prev <= 1'b0;
-            load_sync  <= 1'b0;
-        end else begin
-            start_prev <= start;
-            load_sync  <= start && !start_prev;  // Rising edge
-        end
-    end
 
     // Instantiate AES core
     aes_core core(
@@ -175,3 +67,4 @@ module aes_core_wrapper(
     );
 
 endmodule
+

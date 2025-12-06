@@ -49,7 +49,7 @@ endmodule
 
 module aes_spi(input  logic sck,
                input  logic sdi,
-               input  logic cs,
+            //    input  logic cs,
                output logic sdo,
                input  logic done_decrypt,
                output logic [127:0] key, cyphertext,
@@ -87,10 +87,6 @@ module aes_spi(input  logic sck,
    
     assign sdo = sdodelayed;
 endmodule
-
-
-
-
 
 /////////////////////////////////////////////
 // aes_core

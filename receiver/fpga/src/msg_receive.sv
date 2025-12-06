@@ -19,7 +19,7 @@ module msg_receive #(
     input  logic         tx_clk,
     input  logic [7:0]   data_in, // 8 parallel data lines from sender
     
-    // SPI interface to MCU
+    // SPI interface to MCU for debugging
     input  logic         sck,     // MCU SPI clock
     input  logic         cs,      // MCU chip select (active low)
     output logic         sdo,     // MCU MISO
@@ -80,7 +80,7 @@ module msg_receive #(
     assign ciphertext = buffer[255:128];
     assign key        = buffer[127:0];
 
-    // ========== SPI Output Logic ==========
+    // SPI Output Logic
     // Send the complete 256-bit message (ciphertext + key) via SPI
     logic [255:0] shiftOut;
     logic         sending;
