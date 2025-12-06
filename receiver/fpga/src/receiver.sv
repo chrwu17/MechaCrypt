@@ -40,7 +40,7 @@ module receiver_top(
     logic msg_done, decrypt_done, spi_load;
     logic spi_ready, spi_busy;
     
-    // ========== Message Receiver ==========
+
     msg_receive msg_rx(
         .reset(reset),
         .tx_clk(tx_clk),

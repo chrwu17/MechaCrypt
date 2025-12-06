@@ -5,17 +5,17 @@
 `timescale 10ns/1ns
 
 /////////////////////////////////////////////
-// testbench_inv_mixcolumns_pipelined_tb
-// Tests inv_mixcolumns_pipelined module with 1-cycle latency
+// inv_mixcolumns_sync_tb
+// Tests inv_mixcolumns_sync module with 1-cycle latency
 /////////////////////////////////////////////
 
-module inv_mixcolumns_pipelined_tb();
+module inv_mixcolumns_sync_tb();
     logic clk;
     logic [127:0] a, y, yExpected;
     logic pass = 1'b1;
 
     // Device Under Test
-    inv_mixcolumns_pipelined dut(clk, a, y);
+    inv_mixcolumns_sync dut(clk, a, y);
 
     // Generate clock
     always begin

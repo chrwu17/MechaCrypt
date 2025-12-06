@@ -25,7 +25,7 @@ module sender (
     HSOSC #(.CLKHF_DIV(2'b01)) hf_osc (.CLKHFPU(1'b1), .CLKHFEN(1'b1), .CLKHF(clk)); // 48 MHz
 
     // AES Encryption Module
-    // logic done;
+    logic done;
     logic [127:0] ciphertext;
     logic [127:0] key;
 

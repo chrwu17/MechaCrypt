@@ -81,7 +81,7 @@ module msg_receive #(
     assign key        = buffer[127:0];
 
     // SPI Output Logic
-    // Send the complete 256-bit message (ciphertext + key) via SPI
+    // Send the complete 256-bit message via SPI
     logic [255:0] shiftOut;
     logic         sending;
     logic         sdo_next;
@@ -124,7 +124,7 @@ module msg_receive #(
     
     assign cs_rise = cs_sync_1 && !cs_prev;
 
-    // Combined SPI logic - all driven from clk domain
+    // Combined SPI logic
     always_ff @(posedge clk or negedge reset) begin
         if (!reset) begin
             done_prev <= 1'b0;
@@ -152,7 +152,7 @@ module msg_receive #(
             // Shift data on rising edge of sck
             if (sck_rise && sending && !cs_sync_1) begin
                 shiftOut <= {shiftOut[254:0], 1'b0};
-                sdo_next <= shiftOut[254]; // Output next bit (before shift completes)
+                sdo_next <= shiftOut[254]; // Output next bit
             end
         end
     end

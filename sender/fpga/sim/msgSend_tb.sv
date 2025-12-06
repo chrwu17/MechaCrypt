@@ -6,7 +6,7 @@
 /////////////////////////////////////////////
 // msgSend_tb()
 //      Enhanced testbench for msgSend with data verification
-//      Tests sending both ciphertext and key
+//      Tests sending both ciphertext and key and track all signals bit by bit
 /////////////////////////////////////////////
 
 module msgSend_tb();
@@ -20,7 +20,7 @@ module msgSend_tb();
     logic [7:0] msg_out;
     logic tx_clk, send_done;
 
-    // DUT inputs - separate ciphertext and key
+    // DUT inputs
     logic [127:0] ciphertext = 128'hDEADBEEF_F00DBABE_12345678_ABCDEF00;
     logic [127:0] key        = 128'h0123456789ABCDEF_FEDCBA98_76543210;
 
@@ -97,7 +97,7 @@ module msgSend_tb();
         expected_data[31] = 8'h10;
     end
 
-    // Capture transmitted data when tx_clk is high (data is valid)
+    // Capture transmitted data when tx_clk is high
     logic prev_tx_clk_for_capture;
     
     always @(posedge clk) begin
@@ -107,10 +107,10 @@ module msgSend_tb();
         end else begin
             prev_tx_clk_for_capture <= tx_clk;
             
-            // Capture on rising edge of tx_clk, but after msg_out has been updated
+            // Capture on rising edge of tx_clk
             if (tx_clk && !prev_tx_clk_for_capture && byte_count < 32) begin
-                // Sample msg_out after it's been loaded
-                #1; // Small delay to ensure msg_out is stable
+                // Sample msg_out
+                #1; 
                 received_data[byte_count] = msg_out;
                 $display("[%0t ns] Byte %0d: Sent=0x%h, Expected=0x%h %s",
                          $time, byte_count, msg_out, expected_data[byte_count],
@@ -127,12 +127,12 @@ module msgSend_tb();
         start = 0;
         byte_count = 0;
         
-        $display("\n========================================");
+        $display("\n\n");
         $display("msgSend Testbench - Ciphertext + Key");
-        $display("========================================");
+        $display("\n");
         $display("Ciphertext: 0x%h", ciphertext);
         $display("Key:        0x%h", key);
-        $display("========================================\n");
+        $display("\n\n");
         
         #100;
         reset = 1;
@@ -148,11 +148,11 @@ module msgSend_tb();
         
         // Verify all data
         #200;
-        $display("\n========================================");
+        $display("\n\n");
         $display("Verification Summary");
-        $display("========================================");
+        $display("\n");
         verify_transmission();
-        $display("========================================\n");
+        $display("\n\n");
         
         #100;
         $stop;
@@ -191,7 +191,7 @@ module msgSend_tb();
     // Monitor key signals (less verbose)
     initial begin
         $display("Time\t\ttx_clk\tmsg_out\tsend_done");
-        $display("------------------------------------------------");
+        $display("\n");
     end
     
     always @(posedge clk) begin

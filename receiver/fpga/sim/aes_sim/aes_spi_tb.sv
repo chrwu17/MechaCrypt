@@ -5,7 +5,7 @@
 `timescale 10ns/1ns
 
 /////////////////////////////////////////////
-// testbench_aes_spi (DEBUG VERSION)
+// testbench_aes_spi ()
 // Tests AES with cases from FIPS-197 appendix
 // Simulates full system with SPI load
 /////////////////////////////////////////////
@@ -45,10 +45,10 @@ module testbench_aes_spi();
         load = 0;
         #100;
 
-        // ===== TEST 1 =====
-        $display("========================================");
+        // TEST 1
+        $display("\n");
         $display("Starting Test 1...");
-        $display("========================================");
+        $display("\n");
         key        = 128'h2B7E151628AED2A6ABF7158809CF4F3C;
         cyphertext = 128'h3925841D02DC09FBDC118597196A0B32;
         expected   = 128'h3243F6A8885A308D313198A2E0370734;
@@ -104,11 +104,11 @@ module testbench_aes_spi();
         #50;
         
         // Check result
-        $display("========================================");
+        $display("\n");
         $display("TEST 1 RESULTS:");
         $display("plaintext = %h", plaintext);
         $display("expected  = %h", expected);
-        $display("========================================");
+        $display("\n");
         
         if (plaintext === 128'bx) begin
             $display("ERROR: plaintext is X (undefined)");
@@ -123,9 +123,9 @@ module testbench_aes_spi();
         // ===== TEST 2 =====
         #200;
         $display("");
-        $display("========================================");
+        $display("\n");
         $display("Starting Test 2...");
-        $display("========================================");
+        $display("\n");
         key        = 128'h000102030405060708090A0B0C0D0E0F;
         cyphertext = 128'h69C4E0D86A7B0430D8CDB78070B4C55A;
         expected   = 128'h00112233445566778899AABBCCDDEEFF;
@@ -179,11 +179,11 @@ module testbench_aes_spi();
         #50;
         
         // Check result
-        $display("========================================");
+        $display("\n");
         $display("TEST 2 RESULTS:");
         $display("plaintext = %h", plaintext);
         $display("expected  = %h", expected);
-        $display("========================================");
+        $display("\n");
         
         if (plaintext === 128'bx) begin
             $display("ERROR: plaintext is X (undefined)");
@@ -199,13 +199,13 @@ module testbench_aes_spi();
         #100;
         $display("");
         if (pass) begin
-            $display("=================================");
+            $display("\n");
             $display("ALL TESTS PASSED!");
-            $display("=================================");
+            $display("\n");
         end else begin
-            $display("=================================");
+            $display("\n");
             $display("ERROR: One or more tests failed");
-            $display("=================================");
+            $display("\n");
         end
 
         $stop();
