@@ -12,7 +12,7 @@ This repository contains the source code and documentation for MechaCrypt, with 
   - `mcu/`: Contains C code implementing Web server for message input and parsing in ASCII, TRNG for encryption key generation, SPI communication with FPGA to send keys, plaintext and cyphertext.
 
 - `receiver/`: Contains the FPGA and MCU code for the receiver side of the MechaCrypt system.
-  - `fpga/`: Contains SystemVerilog code and testbench implementing AES decryption and bridge code to .
+  - `fpga/`: Contains SystemVerilog code and testbench implementing AES decryption and bridge code to receive and concatenate the full 128-bit message from the mechanical actuators.
   - `mcu/`: Contains C code for reconstructing full messages from mechanical actuator inputs, displaying progress on a 16×4 LCD, parsing received plaintext, and displaying on web server.
 
 ## Tech Stack
